@@ -1,0 +1,85 @@
+name: "btc_multi_timeframe_momentum"
+symbol: "BTCUSDT"
+
+# Multiple timeframes for different indicators
+timeframes:
+  - "5m"   # For 5-minute RSI
+  - "30m"  # For 30-minute RSI and EMA crossover
+
+indicators:
+  # RSI on 5-minute timeframe
+  rsi_5m:
+    type: "rsi"
+    timeframe: "5m"
+    period: 14
+    oversold: 30
+    overbought: 70
+  
+  # RSI on 30-minute timeframe
+  rsi_30m:
+    type: "rsi"
+    timeframe: "30m"
+    period: 14
+    oversold: 30
+    overbought: 70
+  
+  # Fast EMA on 30-minute timeframe
+  ema_fast_30m:
+    type: "ema"
+    timeframe: "30m"
+    period: 17
+  
+  # Slow EMA on 30-minute timeframe
+  ema_slow_30m:
+    type: "ema"
+    timeframe: "30m"
+    period: 89
+
+# Entry conditions - ALL must be true
+entry_conditions:
+  - type: "less_than"
+    indicator: "rsi_5m"
+    value: 30
+    description: "5-minute RSI is oversold (below 30)"
+  
+  - type: "less_than"
+    indicator: "rsi_30m"
+    value: 30
+    description: "30-minute RSI is oversold (below 30)"
+  
+  - type: "cross_above"
+    indicator1: "ema_fast_30m"
+    indicator2: "ema_slow_30m"
+    description: "Fast EMA crosses above slow EMA on 30-minute chart"
+
+# Exit conditions - ANY can trigger exit
+exit_conditions:
+  - type: "take_profit"
+    percent: 4.0
+    description: "Take profit at 4% gain"
+  
+  - type: "stop_loss"
+    percent: 1.0
+    description: "Stop loss at 1% loss"
+  
+  - type: "time_exceeds"
+    seconds: 7200
+    description: "Exit after 2 hours if take profit not reached"
+  
+  - type: "support_resistance"
+    price: 42000.0
+    direction: "below"
+    description: "Exit if price drops below support at 42000"
+  
+  - type: "end_of_day"
+    time_utc: "00:00"
+    description: "Exit all positions at end of day (00:00 UTC)"
+
+# Position sizing
+position_size: 0.01  # 0.01 BTC per trade
+max_position_size: 0.05  # Maximum 0.05 BTC total
+
+# Risk management
+risk_parameters:
+  max_trades_per_day: 5
+  cooldown_after_loss: 3600  # Wait 1 hour after a loss before next trade
