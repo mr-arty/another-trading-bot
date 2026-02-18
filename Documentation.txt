@@ -1,0 +1,79 @@
+Core Implementation
+
+1. Strategy Configuration Module (src/strategy/config.py)
+
+StrategyConfig dataclass with complete YAML schema support
+IndicatorConfig for RSI and EMA indicators
+EntryCondition supporting: less_than, greater_than, cross_above, cross_below
+ExitCondition supporting: take_profit, stop_loss, time_exceeds, support_resistance, end_of_day
+RiskParameters for optional risk management settings
+Comprehensive validation for all configuration fields
+load_strategy_from_yaml() function with error handling
+
+2. Strategy Directory Loader (src/strategy/loader.py)
+
+StrategyLoader class for managing multiple strategies
+Loads all YAML files from a configured directory
+Handles invalid strategies with proper error logging
+Prevents duplicate strategy names
+Methods for getting, checking, reloading, and removing strategies
+
+3. File Watcher (src/strategy/watcher.py)
+
+StrategyWatcher class using the watchdog library
+Monitors strategy directory for file changes (create, modify, delete)
+Triggers async callbacks on file events
+Proper start/stop lifecycle management
+
+Core Features:
+
+✓ ExchangeConnector class using pybit library
+✓ Authenticated connection with API credentials (testnet/mainnet support)
+✓ WebSocket connection for real-time market data streams
+✓ REST API methods for order placement and position queries
+Subtask 4.1 - Reconnection Logic:
+
+✓ Connection loss detection
+✓ Exponential backoff implementation (1s → 2s → 4s → 8s → 16s → max 60s)
+✓ Automatic reconnection attempts
+
+4.3 - Market Data:
+
+✓ WebSocket subscription to market data streams
+✓ Parsing and validation of incoming kline data
+✓ MarketData dataclass creation with OHLCV data
+✓ Support for multiple symbol subscriptions
+
+4.5 - Rate Limiting:
+
+✓ Token bucket algorithm implementation
+✓ Configurable rate limits (requests per second)
+✓ Automatic request queuing when approaching limits
+
+4.7 - Error Handling:
+
+✓ Comprehensive error catching and logging
+✓ Error callback registration system
+✓ Strategy notification on API errors
+✓ Graceful error recovery
+Additional Components
+Data Structures:
+
+MarketData - OHLCV market data
+Order - Order information
+OrderResult - Order submission results
+Position - Position tracking
+OrderSide, OrderType, OrderStatus - Enumerations
+Key Methods:
+
+connect() / disconnect() - Connection management
+subscribe_market_data() - Market data subscriptions
+place_order() - Order placement
+cancel_order() - Order cancellation
+get_positions() - Position queries
+close_position() - Position closure
+register_error_callback() - Error notification
+Testing & Documentation
+✓ Unit tests in tests/unit/test_exchange_connector.py
+✓ Demo script in demo_exchange_connector.py
+✓ Comprehensive README in src/exchange/README.md

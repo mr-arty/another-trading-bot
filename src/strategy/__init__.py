@@ -10,6 +10,7 @@ from .config import (
 )
 from .loader import StrategyLoader
 from .watcher import StrategyWatcher, watch_strategies
+from .engine import StrategyEngine, Signal, StrategyState
 
 __all__ = [
     "StrategyConfig",
@@ -21,4 +22,7 @@ __all__ = [
     "StrategyLoader",
     "StrategyWatcher",
     "watch_strategies",
+    "StrategyEngine",
+    "Signal",
+    "StrategyState",
 ]

@@ -1,0 +1,359 @@
+name: "btc_range_trading_mean_reversion"
+symbol: "BTCUSDT"
+strategy_type: "range_trading"
+
+# Multiple timeframes for analysis
+timeframes:
+  - "15m"  # Primary entry/exit timeframe
+  - "1h"   # S/R level detection (swing highs/lows)
+  - "4h"   # 200 EMA reference line
+
+# =============================================================================
+# INDICATORS
+# =============================================================================
+indicators:
+  # --- 200 EMA Reference Line (4H) ---
+  ema_200_4h:
+    type: "ema"
+    timeframe: "4h"
+    period: 200
+    description: "Reference line - also confirms range breakout when crosses S/R"
+
+  # --- Support/Resistance: Swing High/Low (1H) ---
+  swing_high_1h:
+    type: "swing_high"
+    timeframe: "1h"
+    lookback: 20
+    pivot_bars: 3
+    description: "Resistance level = recent swing high"
+
+  swing_low_1h:
+    type: "swing_low"
+    timeframe: "1h"
+    lookback: 20
+    pivot_bars: 3
+    description: "Support level = recent swing low"
+
+  # --- Volume Profile for POC (1H) ---
+  poc_1h:
+    type: "poc"
+    timeframe: "1h"
+    lookback: 48
+    description: "Point of Control - take profit target (mid-range)"
+
+  volume_avg_1h:
+    type: "volume_sma"
+    timeframe: "1h"
+    period: 20
+    description: "Average volume for breakout detection"
+
+  # --- Entry Confirmation (15m) ---
+  rsi_15m:
+    type: "rsi"
+    timeframe: "15m"
+    period: 14
+    oversold: 35
+    overbought: 65
+
+# =============================================================================
+# SUPPORT/RESISTANCE CONFIGURATION
+# =============================================================================
+support_resistance:
+  # S/R = Recent swing high and swing low only
+  support:
+    source: "swing_low_1h"
+    description: "Support = recent swing low"
+
+  resistance:
+    source: "swing_high_1h"
+    description: "Resistance = recent swing high"
+
+  # Zone (band) around S/R levels
+  zone_width_percent: 0.3
+
+  # Range validation
+  min_range_width_percent: 1.0
+  max_range_width_percent: 5.0
+
+# =============================================================================
+# 200 EMA REFERENCE LINE
+# =============================================================================
+reference_line:
+  indicator: "ema_200_4h"
+  timeframe: "4h"
+
+  # Range breakout confirmation via 200 EMA
+  breakout_confirmation:
+    ema_above_resistance:
+      condition: "ema_200_4h > resistance"
+      result: "confirmed_breakout_up"
+      action: "close_all_positions"
+      probability: 100
+
+    ema_below_support:
+      condition: "ema_200_4h < support"
+      result: "confirmed_breakout_down"
+      action: "close_all_positions"
+      probability: 100
+
+  # Trend bias for entry preference
+  trend_bias:
+    bullish: "price > ema_200_4h"
+    bearish: "price < ema_200_4h"
+    neutral_zone_percent: 0.5
+
+# =============================================================================
+# STATE MACHINE
+# =============================================================================
+state_machine:
+  enabled: true
+  initial_state: "NEUTRAL"
+
+  states:
+    NEUTRAL:
+      probability: 0
+      description: "Outside S/R bands, no active setup"
+
+    BAND_ENTERED:
+      probability_range: [20, 40]
+      description: "Price entered the S/R zone"
+      trigger:
+        distance_from_sr_percent: 0.5
+
+    AT_LEVEL:
+      probability_range: [40, 70]
+      description: "Price at or very close to S/R level"
+      trigger:
+        distance_from_sr_percent: 0.2
+
+    PAST_LEVEL:
+      probability_range: [70, 90]
+      description: "Price broke past S/R - suspected breakout"
+      trigger:
+        price_beyond_sr_percent: 0.3
+        candle_closes_beyond: 1
+
+    CONFIRMED_BREAKOUT:
+      probability: 100
+      description: "Range exit confirmed - close all positions"
+      trigger_any:
+        # Method 1: Price action confirmation
+        - price_beyond_sr_percent: 0.5
+          candle_closes_beyond: 2
+        # Method 2: Volume spike confirmation
+        - price_beyond_sr_percent: 0.5
+          volume_multiplier: 1.5
+        # Method 3: 200 EMA crosses range bounds
+        - ema_200_crosses_sr: true
+
+  transitions:
+    - from: "NEUTRAL"
+      to: "BAND_ENTERED"
+      when: "price_enters_sr_zone"
+
+    - from: "BAND_ENTERED"
+      to: "AT_LEVEL"
+      when: "price_approaches_exact_level"
+
+    - from: "BAND_ENTERED"
+      to: "NEUTRAL"
+      when: "price_moves_to_mid_range"
+
+    - from: "AT_LEVEL"
+      to: "BAND_ENTERED"
+      when: "price_bounces_into_band"
+
+    - from: "AT_LEVEL"
+      to: "PAST_LEVEL"
+      when: "price_breaks_through"
+
+    - from: "PAST_LEVEL"
+      to: "AT_LEVEL"
+      when: "price_pulls_back"
+
+    - from: "PAST_LEVEL"
+      to: "CONFIRMED_BREAKOUT"
+      when: "breakout_confirmed"
+
+    # Direct transition from any state when 200 EMA crosses bounds
+    - from: "*"
+      to: "CONFIRMED_BREAKOUT"
+      when: "ema_200_crosses_range_bounds"
+      priority: "highest"
+
+# =============================================================================
+# ENTRY CONDITIONS
+# =============================================================================
+entry_conditions_long:
+  description: "Long entry at support level"
+  all_required:
+    - type: "state_equals"
+      state: "AT_LEVEL"
+      level_type: "support"
+      description: "State machine at support level"
+
+    - type: "price_in_zone"
+      zone: "support"
+      distance_percent: 0.2
+      description: "Price within 0.2% of support"
+
+    - type: "less_than"
+      indicator: "rsi_15m"
+      value: 35
+      description: "15m RSI oversold confirmation"
+
+    - type: "ema_within_range"
+      indicator: "ema_200_4h"
+      description: "200 EMA is between support and resistance (range intact)"
+
+entry_conditions_short:
+  description: "Short entry at resistance level"
+  all_required:
+    - type: "state_equals"
+      state: "AT_LEVEL"
+      level_type: "resistance"
+      description: "State machine at resistance level"
+
+    - type: "price_in_zone"
+      zone: "resistance"
+      distance_percent: 0.2
+      description: "Price within 0.2% of resistance"
+
+    - type: "greater_than"
+      indicator: "rsi_15m"
+      value: 65
+      description: "15m RSI overbought confirmation"
+
+    - type: "ema_within_range"
+      indicator: "ema_200_4h"
+      description: "200 EMA is between support and resistance (range intact)"
+
+# =============================================================================
+# EXIT CONDITIONS
+# =============================================================================
+exit_conditions:
+  # --- Take Profit: Mid-Range ---
+  - type: "mid_range_take_profit"
+    calculation: "(support + resistance) / 2"
+    use_poc_if_available: true
+    indicator: "poc_1h"
+    description: "Take profit at mid-range (POC if available)"
+
+  # --- Stop Loss: Beyond S/R Level ---
+  - type: "dynamic_stop_loss"
+    reference: "entry_sr_level"
+    offset_percent: 0.5
+    description: "Stop loss 0.5% beyond the entry S/R level"
+
+  # --- 200 EMA Breakout Confirmation (100%) ---
+  - type: "ema_breakout"
+    indicator: "ema_200_4h"
+    condition: "ema_crosses_range_bounds"
+    action: "close_all_positions"
+    description: "Exit immediately when 200 EMA crosses support or resistance"
+
+  # --- State-Based Exit ---
+  - type: "state_exit"
+    trigger_state: "CONFIRMED_BREAKOUT"
+    action: "close_immediately"
+    description: "Close all positions when breakout confirmed"
+
+  - type: "state_exit"
+    trigger_state: "PAST_LEVEL"
+    action: "tighten_stop"
+    new_stop_percent: 0.2
+    description: "Tighten stop when suspected breakout"
+
+  # --- Time-Based Exit ---
+  - type: "time_exceeds"
+    seconds: 14400
+    description: "Exit after 4 hours if no TP/SL hit"
+
+# =============================================================================
+# BREAKOUT CONFIRMATION LOGIC
+# =============================================================================
+breakout_confirmation:
+  # Suspected breakout (70-90% probability)
+  suspected:
+    conditions:
+      - price_beyond_sr_percent: 0.3
+        candle_closes: 1
+    actions:
+      - tighten_stop_percent: 0.2
+
+  # Confirmed breakout (100% probability)
+  confirmed:
+    conditions_any:
+      # Price-based confirmation
+      - price_beyond_sr_percent: 0.5
+        candle_closes: 2
+      # Volume-based confirmation
+      - price_beyond_sr_percent: 0.5
+        volume_above_avg: 1.5
+      # 200 EMA confirmation (highest priority)
+      - ema_200_above_resistance: true
+      - ema_200_below_support: true
+    actions:
+      - close_all_positions: true
+      - invalidate_range: true
+
+# =============================================================================
+# VOLUME PROFILE (POC for Take Profit)
+# =============================================================================
+volume_profile:
+  enabled: true
+  timeframe: "1h"
+  lookback_periods: 48
+
+  poc:
+    description: "Point of Control - highest volume price level"
+    use_as: "take_profit_target"
+    fallback: "mid_range"
+
+# =============================================================================
+# POSITION SIZING & RISK MANAGEMENT
+# =============================================================================
+position_size: 0.01
+max_position_size: 0.03
+
+risk_parameters:
+  max_trades_per_day: 3
+  cooldown_after_loss: 7200
+  max_daily_loss_percent: 2.0
+  max_risk_per_trade_percent: 1.0
+
+# =============================================================================
+# STRATEGY SUMMARY
+# =============================================================================
+metadata:
+  version: "1.0.0"
+  description: |
+    Range trading strategy using swing high/low as S/R levels.
+
+    SUPPORT/RESISTANCE:
+    - Support = Recent swing low (1H)
+    - Resistance = Recent swing high (1H)
+
+    200 EMA (4H) REFERENCE LINE:
+    - Acts as trend context for entry bias
+    - CRITICAL: When 200 EMA crosses range bounds, breakout is 100% confirmed
+      - EMA > Resistance = Range broken upward
+      - EMA < Support = Range broken downward
+      - Either case = Close all positions immediately
+
+    ENTRIES:
+    - Long at support (when RSI < 35)
+    - Short at resistance (when RSI > 65)
+    - Only when 200 EMA is within the range (range intact)
+
+    EXITS:
+    - Take profit at mid-range (POC)
+    - Stop loss beyond S/R level
+    - Immediate exit on confirmed breakout (including 200 EMA signal)
+
+    STATE MACHINE:
+    - NEUTRAL (0%): Outside S/R bands
+    - BAND_ENTERED (20-40%): Within 0.5% of S/R
+    - AT_LEVEL (40-70%): Within 0.2% of S/R
+    - PAST_LEVEL (70-90%): Suspected breakout
+    - CONFIRMED_BREAKOUT (100%): Exit all positions
