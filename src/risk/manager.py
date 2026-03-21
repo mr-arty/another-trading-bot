@@ -86,9 +86,13 @@ class RiskManager:
         """
         Validate a buy signal.
         
-        Checks:
+        For long strategies (opening/adding to position):
         1. Position size does not exceed max_position_size
         2. Total exposure does not exceed max_total_exposure
+        
+        For short strategies (closing position):
+        1. Short position exists
+        2. Buy quantity does not exceed short position quantity
         
         Args:
             signal: Buy signal to validate
@@ -96,6 +100,38 @@ class RiskManager:
         Returns:
             RiskCheckResult with approval status and reason
         """
+        position_key = (signal.strategy_name, signal.symbol)
+        current_position = self._positions.get(position_key, 0.0)
+        
+        # If we have a short position (negative quantity), this buy is closing it
+        if current_position < 0:
+            # Closing short position
+            if signal.quantity > abs(current_position):
+                reason = (
+                    f"Buy quantity {signal.quantity} exceeds short position "
+                    f"{abs(current_position)}"
+                )
+                logger.warning(
+                    "signal_rejected_exceeds_short_position",
+                    strategy=signal.strategy_name,
+                    symbol=signal.symbol,
+                    quantity=signal.quantity,
+                    short_position=abs(current_position)
+                )
+                return RiskCheckResult(approved=False, reason=reason)
+            
+            logger.info(
+                "buy_signal_approved_close_short",
+                strategy=signal.strategy_name,
+                symbol=signal.symbol,
+                quantity=signal.quantity
+            )
+            return RiskCheckResult(
+                approved=True,
+                reason="Buy signal approved (closing short)"
+            )
+        
+        # Opening or adding to long position
         # Check position size limit
         if signal.quantity > self.config.max_position_size:
             reason = (
@@ -147,9 +183,13 @@ class RiskManager:
         """
         Validate a sell signal.
         
-        Checks:
-        1. Position exists for this strategy and symbol
+        For long strategies (closing position):
+        1. Long position exists
         2. Sell quantity does not exceed current holding
+        
+        For short strategies (opening/adding to position):
+        1. Position size does not exceed max_position_size
+        2. Total exposure does not exceed max_total_exposure
         
         Args:
             signal: Sell signal to validate
@@ -160,31 +200,67 @@ class RiskManager:
         position_key = (signal.strategy_name, signal.symbol)
         current_position = self._positions.get(position_key, 0.0)
         
-        # Check if position exists
-        if current_position <= 0:
+        # If we have a long position (positive quantity), this sell is closing it
+        if current_position > 0:
+            # Closing long position
+            if signal.quantity > current_position:
+                reason = (
+                    f"Sell quantity {signal.quantity} exceeds current holding "
+                    f"{current_position}"
+                )
+                logger.warning(
+                    "signal_rejected_quantity_exceeds_holding",
+                    strategy=signal.strategy_name,
+                    symbol=signal.symbol,
+                    sell_quantity=signal.quantity,
+                    current_position=current_position
+                )
+                return RiskCheckResult(approved=False, reason=reason)
+            
+            logger.info(
+                "sell_signal_approved_close_long",
+                strategy=signal.strategy_name,
+                symbol=signal.symbol,
+                quantity=signal.quantity,
+                current_position=current_position
+            )
+            return RiskCheckResult(
+                approved=True,
+                reason="Sell signal approved (closing long)"
+            )
+        
+        # Opening or adding to short position
+        # Check position size limit
+        if signal.quantity > self.config.max_position_size:
             reason = (
-                f"No position exists for {signal.symbol} "
-                f"in strategy {signal.strategy_name}"
+                f"Position size {signal.quantity} exceeds max "
+                f"{self.config.max_position_size}"
             )
             logger.warning(
-                "signal_rejected_no_position",
+                "signal_rejected_position_size",
                 strategy=signal.strategy_name,
-                symbol=signal.symbol
+                symbol=signal.symbol,
+                quantity=signal.quantity,
+                max_position_size=self.config.max_position_size
             )
             return RiskCheckResult(approved=False, reason=reason)
         
-        # Check if sell quantity exceeds current holding
-        if signal.quantity > current_position:
+        # Check total exposure limit
+        current_exposure = await self._calculate_total_exposure()
+        new_exposure = current_exposure + signal.quantity
+        
+        if new_exposure > self.config.max_total_exposure:
             reason = (
-                f"Sell quantity {signal.quantity} exceeds current holding "
-                f"{current_position}"
+                f"Total exposure {new_exposure:.2f} would exceed max "
+                f"{self.config.max_total_exposure}"
             )
             logger.warning(
-                "signal_rejected_quantity_exceeds_holding",
+                "signal_rejected_total_exposure",
                 strategy=signal.strategy_name,
                 symbol=signal.symbol,
-                sell_quantity=signal.quantity,
-                current_position=current_position
+                current_exposure=current_exposure,
+                new_exposure=new_exposure,
+                max_total_exposure=self.config.max_total_exposure
             )
             return RiskCheckResult(approved=False, reason=reason)
         
@@ -194,7 +270,7 @@ class RiskManager:
             strategy=signal.strategy_name,
             symbol=signal.symbol,
             quantity=signal.quantity,
-            current_position=current_position
+            new_exposure=new_exposure
         )
         return RiskCheckResult(
             approved=True,

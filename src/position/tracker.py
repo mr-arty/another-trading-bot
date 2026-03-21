@@ -130,7 +130,8 @@ class PositionTracker:
         """
         Handle buy order fill.
         
-        Updates position quantity and calculates new average entry price.
+        For long positions: Opens or adds to position (positive quantity)
+        For short positions: Closes or reduces position (negative quantity becomes less negative)
         
         Args:
             position_key: Position key (strategy_name, symbol)
@@ -139,7 +140,7 @@ class PositionTracker:
             strategy_name: Strategy name
         """
         if position is None:
-            # New position
+            # New long position
             self._positions[position_key] = Position(
                 symbol=fill.symbol,
                 strategy_name=strategy_name,
@@ -154,10 +155,43 @@ class PositionTracker:
                 strategy=strategy_name,
                 symbol=fill.symbol,
                 quantity=fill.quantity,
-                entry_price=fill.price
+                entry_price=fill.price,
+                position_type="long"
             )
+        elif position.quantity < 0:
+            # Closing/reducing short position
+            realized_pnl = (position.entry_price - fill.price) * fill.quantity - fill.fee
+            position.realized_pnl += realized_pnl
+            
+            new_quantity = position.quantity + fill.quantity
+            position.quantity = new_quantity
+            position.current_price = fill.price
+            
+            if new_quantity >= 0:
+                # Short position fully closed
+                position.status = "closed"
+                position.closed_at = fill.timestamp
+                
+                await self._store_trade_log(position, fill.price, "manual_close")
+                del self._positions[position_key]
+                
+                logger.info(
+                    "short_position_closed",
+                    strategy=strategy_name,
+                    symbol=fill.symbol,
+                    realized_pnl=position.realized_pnl,
+                    exit_price=fill.price
+                )
+            else:
+                logger.info(
+                    "short_position_reduced",
+                    strategy=strategy_name,
+                    symbol=fill.symbol,
+                    new_quantity=new_quantity,
+                    realized_pnl=realized_pnl
+                )
         else:
-            # Add to existing position - calculate new average entry price
+            # Add to existing long position - calculate new average entry price
             total_cost = (position.quantity * position.entry_price) + (fill.quantity * fill.price)
             new_quantity = position.quantity + fill.quantity
             new_entry_price = total_cost / new_quantity
@@ -184,7 +218,8 @@ class PositionTracker:
         """
         Handle sell order fill.
         
-        Decreases position quantity and calculates realized P&L.
+        For long positions: Closes or reduces position (positive quantity becomes less positive)
+        For short positions: Opens or adds to position (negative quantity)
         
         Args:
             position_key: Position key (strategy_name, symbol)
@@ -193,48 +228,72 @@ class PositionTracker:
             strategy_name: Strategy name
         """
         if position is None:
-            logger.warning(
-                "sell_fill_no_position",
-                strategy=strategy_name,
+            # New short position
+            self._positions[position_key] = Position(
                 symbol=fill.symbol,
-                quantity=fill.quantity
+                strategy_name=strategy_name,
+                quantity=-fill.quantity,  # Negative for short
+                entry_price=fill.price,
+                current_price=fill.price,
+                opened_at=fill.timestamp,
+                side="Sell"
             )
-            return
-        
-        # Calculate realized P&L for this fill
-        realized_pnl = (fill.price - position.entry_price) * fill.quantity - fill.fee
-        position.realized_pnl += realized_pnl
-        
-        # Update quantity
-        new_quantity = position.quantity - fill.quantity
-        position.quantity = new_quantity
-        position.current_price = fill.price
-        
-        if new_quantity <= 0:
-            # Position closed
-            position.status = "closed"
-            position.closed_at = fill.timestamp
-            
-            # Store in trade log
-            await self._store_trade_log(position, fill.price, "manual_close")
-            
-            # Remove from active positions
-            del self._positions[position_key]
-            
             logger.info(
-                "position_closed",
+                "position_opened",
                 strategy=strategy_name,
                 symbol=fill.symbol,
-                realized_pnl=position.realized_pnl,
-                exit_price=fill.price
+                quantity=-fill.quantity,
+                entry_price=fill.price,
+                position_type="short"
             )
+        elif position.quantity > 0:
+            # Closing/reducing long position
+            realized_pnl = (fill.price - position.entry_price) * fill.quantity - fill.fee
+            position.realized_pnl += realized_pnl
+            
+            new_quantity = position.quantity - fill.quantity
+            position.quantity = new_quantity
+            position.current_price = fill.price
+            
+            if new_quantity <= 0:
+                # Long position fully closed
+                position.status = "closed"
+                position.closed_at = fill.timestamp
+                
+                await self._store_trade_log(position, fill.price, "manual_close")
+                del self._positions[position_key]
+                
+                logger.info(
+                    "position_closed",
+                    strategy=strategy_name,
+                    symbol=fill.symbol,
+                    realized_pnl=position.realized_pnl,
+                    exit_price=fill.price
+                )
+            else:
+                logger.info(
+                    "position_decreased",
+                    strategy=strategy_name,
+                    symbol=fill.symbol,
+                    new_quantity=new_quantity,
+                    realized_pnl=realized_pnl
+                )
         else:
+            # Add to existing short position - calculate new average entry price
+            total_cost = (abs(position.quantity) * position.entry_price) + (fill.quantity * fill.price)
+            new_quantity = position.quantity - fill.quantity  # More negative
+            new_entry_price = total_cost / abs(new_quantity)
+            
+            position.quantity = new_quantity
+            position.entry_price = new_entry_price
+            position.current_price = fill.price
+            
             logger.info(
-                "position_decreased",
+                "short_position_increased",
                 strategy=strategy_name,
                 symbol=fill.symbol,
                 new_quantity=new_quantity,
-                realized_pnl=realized_pnl
+                new_entry_price=new_entry_price
             )
     
     async def calculate_unrealized_pnl(

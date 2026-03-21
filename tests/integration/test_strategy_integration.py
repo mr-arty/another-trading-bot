@@ -175,6 +175,18 @@ async def test_multiple_strategies_loading():
     type: "rsi"
     timeframe: "5m"
     period: 14"""
+                indicator_name = "indicator"
+                # For RSI, use simple conditions
+                if data["condition_type"] == "cross_below":
+                    entry_condition = """
+  - type: "less_than"
+    indicator: "indicator"
+    value: 30"""
+                else:
+                    entry_condition = f"""
+  - type: "{data['condition_type']}"
+    indicator: "{indicator_name}"
+    value: 50"""
             else:
                 indicator_config = """
   ema_fast:
@@ -185,17 +197,18 @@ async def test_multiple_strategies_loading():
     type: "ema"
     timeframe: "5m"
     period: 21"""
-            
-            if data["condition_type"] in ["less_than", "greater_than"]:
-                entry_condition = f"""
-  - type: "{data['condition_type']}"
-    indicator: "indicator"
-    value: 50"""
-            else:
-                entry_condition = """
+                indicator_name = "ema_fast"
+                # For EMA, can use cross conditions
+                if data["condition_type"] == "cross_below":
+                    entry_condition = """
   - type: "cross_below"
     indicator1: "ema_fast"
     indicator2: "ema_slow" """
+                else:
+                    entry_condition = f"""
+  - type: "{data['condition_type']}"
+    indicator: "{indicator_name}"
+    value: 50"""
             
             strategy_content = f"""
 name: "{data['name']}"

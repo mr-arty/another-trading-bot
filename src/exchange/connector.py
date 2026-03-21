@@ -158,6 +158,7 @@ class ExchangeConnector:
         self._connected = False
         self._reconnecting = False
         self._should_reconnect = True
+        self._event_loop: Optional[asyncio.AbstractEventLoop] = None
         
         # HTTP client for REST API
         self.http_client: Optional[HTTP] = None
@@ -184,6 +185,9 @@ class ExchangeConnector:
         Creates both HTTP and WebSocket clients with authentication.
         """
         try:
+            # Store the event loop for callbacks
+            self._event_loop = asyncio.get_running_loop()
+            
             # Initialize HTTP client for REST API
             self.http_client = HTTP(
                 testnet=self.testnet,
@@ -287,13 +291,34 @@ class ExchangeConnector:
             
             # Subscribe to kline (candlestick) data via WebSocket
             try:
+                # Create a sync wrapper for the async callback
+                def sync_callback(msg):
+                    """Sync wrapper that schedules async handler."""
+                    try:
+                        # Use the stored event loop
+                        if self._event_loop and self._event_loop.is_running():
+                            asyncio.run_coroutine_threadsafe(
+                                self._handle_market_data(symbol, msg, callback),
+                                self._event_loop
+                            )
+                        else:
+                            logger.warning(
+                                "no_event_loop_for_callback",
+                                symbol=symbol
+                            )
+                    except Exception as e:
+                        logger.error(
+                            "callback_wrapper_error",
+                            symbol=symbol,
+                            error=str(e),
+                            exc_info=True
+                        )
+                
                 # Subscribe to 1-minute klines for real-time data
                 self.ws_client.kline_stream(
                     interval=1,
                     symbol=symbol,
-                    callback=lambda msg: asyncio.create_task(
-                        self._handle_market_data(symbol, msg, callback)
-                    )
+                    callback=sync_callback
                 )
                 
                 logger.info("market_data_subscribed", symbol=symbol)

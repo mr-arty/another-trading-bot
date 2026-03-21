@@ -226,7 +226,25 @@ class StrategyEngine:
             # Store indicators in pair state
             self._pair_states[pair_key]['indicators'] = indicators
             
-            # Evaluate conditions and generate signals
+            # Check if this is a test strategy
+            if state.config.strategy_type == "test":
+                # Test mode: just log data reception and indicator values
+                logger.info(
+                    "test_strategy_data_received",
+                    strategy=strategy_name,
+                    symbol=data.symbol,
+                    price=data.close,
+                    volume=data.volume,
+                    timestamp=data.timestamp.isoformat(),
+                    indicators=indicators,
+                    timeframes=state.config.timeframes
+                )
+                
+                # Update previous indicators for next iteration
+                state.previous_indicators = indicators.copy()
+                return
+            
+            # Regular strategy: evaluate conditions and generate signals
             if not state.has_position:
                 # Check entry conditions
                 signal = await self._evaluate_entry_conditions(
@@ -336,7 +354,7 @@ class StrategyEngine:
             indicators: Calculated indicator values
             
         Returns:
-            Buy signal if conditions met, None otherwise
+            Buy signal for long strategies or sell signal for short strategies if conditions met, None otherwise
         """
         config = state.config
         
@@ -358,11 +376,14 @@ class StrategyEngine:
                 break
         
         if all_met:
-            # Generate buy signal
+            # Generate signal based on position direction
+            # Long: entry = buy, Short: entry = sell
+            signal_side = 'buy' if config.position_direction == 'long' else 'sell'
+            
             signal = Signal(
                 strategy_name=config.name,
                 symbol=config.symbol,
-                side='buy',
+                side=signal_side,
                 quantity=config.position_size,
                 price=None,  # Market order
                 timestamp=datetime.now(),
@@ -373,6 +394,8 @@ class StrategyEngine:
                 "entry_signal_generated",
                 strategy=config.name,
                 symbol=config.symbol,
+                position_direction=config.position_direction,
+                side=signal_side,
                 reason=signal.reason
             )
             
@@ -475,7 +498,7 @@ class StrategyEngine:
             indicators: Calculated indicator values
             
         Returns:
-            Sell signal if any condition met, None otherwise
+            Sell signal for long strategies or buy signal for short strategies if any condition met, None otherwise
         """
         config = state.config
         
@@ -488,11 +511,14 @@ class StrategyEngine:
             )
             
             if met:
-                # Generate sell signal
+                # Generate signal based on position direction
+                # Long: exit = sell, Short: exit = buy
+                signal_side = 'sell' if config.position_direction == 'long' else 'buy'
+                
                 signal = Signal(
                     strategy_name=config.name,
                     symbol=config.symbol,
-                    side='sell',
+                    side=signal_side,
                     quantity=config.position_size,  # Close full position
                     price=None,  # Market order
                     timestamp=datetime.now(),
@@ -503,6 +529,8 @@ class StrategyEngine:
                     "exit_signal_generated",
                     strategy=config.name,
                     symbol=config.symbol,
+                    position_direction=config.position_direction,
+                    side=signal_side,
                     reason=signal.reason
                 )
                 

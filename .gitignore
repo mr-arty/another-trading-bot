@@ -3,3 +3,5 @@ venv/*
 .kiro/*
 .pytest_cache/*
 .vscode/*
+
+.env

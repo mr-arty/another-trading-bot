@@ -145,10 +145,16 @@ class TestLoadConfig:
         assert config.api_rate_limit_per_second == 10
     
     @pytest.mark.asyncio
-    async def test_load_config_missing_required(self, monkeypatch):
+    async def test_load_config_missing_required(self, tmp_path, monkeypatch):
         """Test that missing required parameters raises error."""
-        # Don't set API key
+        # Create strategies directory so that's not the issue
+        strategies_dir = tmp_path / "strategies"
+        strategies_dir.mkdir()
+        
+        # Explicitly remove API key and set other required params
+        monkeypatch.delenv("BYBIT_API_KEY", raising=False)
         monkeypatch.setenv("BYBIT_API_SECRET", "test_secret")
+        monkeypatch.setenv("STRATEGIES_DIR", str(strategies_dir))
         
         with pytest.raises(ValueError, match="exchange_api_key is required"):
             await load_config()

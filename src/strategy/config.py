@@ -58,11 +58,13 @@ class StrategyConfig:
     symbol: str
     timeframes: List[str]
     indicators: Dict[str, IndicatorConfig]
-    entry_conditions: List[EntryCondition]
-    exit_conditions: List[ExitCondition]
-    position_size: float
-    max_position_size: float
+    entry_conditions: List[EntryCondition] = field(default_factory=list)
+    exit_conditions: List[ExitCondition] = field(default_factory=list)
+    position_size: float = 0.0
+    max_position_size: float = 0.0
     risk_parameters: Optional[RiskParameters] = None
+    position_direction: str = "long"  # 'long' or 'short'
+    strategy_type: Optional[str] = None  # Optional: 'test' for testing mode
     
     def __post_init__(self):
         """Validate strategy configuration after initialization."""
@@ -81,18 +83,39 @@ class StrategyConfig:
             errors.append("At least one timeframe is required")
         if not self.indicators:
             errors.append("At least one indicator is required")
-        if not self.entry_conditions:
-            errors.append("At least one entry condition is required")
-        if not self.exit_conditions:
-            errors.append("At least one exit condition is required")
         
-        # Validate position sizes
-        if self.position_size <= 0:
-            errors.append("position_size must be positive")
-        if self.max_position_size <= 0:
-            errors.append("max_position_size must be positive")
-        if self.position_size > self.max_position_size:
-            errors.append("position_size cannot exceed max_position_size")
+        # Check if this is a test strategy FIRST
+        is_test_strategy = self.strategy_type == "test"
+        
+        if is_test_strategy:
+            # Test strategies: entry/exit conditions and position sizes are optional
+            # Set defaults if not provided
+            if not self.entry_conditions:
+                self.entry_conditions = []
+            if not self.exit_conditions:
+                self.exit_conditions = []
+            if self.position_size <= 0:
+                self.position_size = 0.0
+            if self.max_position_size <= 0:
+                self.max_position_size = 0.0
+        else:
+            # Regular strategies require entry/exit conditions and position sizes
+            if not self.entry_conditions:
+                errors.append("At least one entry condition is required")
+            if not self.exit_conditions:
+                errors.append("At least one exit condition is required")
+            
+            # Validate position sizes
+            if self.position_size <= 0:
+                errors.append("position_size must be positive")
+            if self.max_position_size <= 0:
+                errors.append("max_position_size must be positive")
+            if self.position_size > self.max_position_size:
+                errors.append("position_size cannot exceed max_position_size")
+            
+            # Validate position direction
+            if self.position_direction not in ["long", "short"]:
+                errors.append(f"position_direction must be 'long' or 'short', got '{self.position_direction}'")
         
         # Validate timeframes
         valid_timeframes = ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]
@@ -105,15 +128,17 @@ class StrategyConfig:
             indicator_errors = self._validate_indicator(name, indicator)
             errors.extend(indicator_errors)
         
-        # Validate entry conditions
-        for i, condition in enumerate(self.entry_conditions):
-            condition_errors = self._validate_entry_condition(i, condition)
-            errors.extend(condition_errors)
-        
-        # Validate exit conditions
-        for i, condition in enumerate(self.exit_conditions):
-            condition_errors = self._validate_exit_condition(i, condition)
-            errors.extend(condition_errors)
+        # Only validate entry/exit conditions for non-test strategies
+        if not is_test_strategy:
+            # Validate entry conditions
+            for i, condition in enumerate(self.entry_conditions):
+                condition_errors = self._validate_entry_condition(i, condition)
+                errors.extend(condition_errors)
+            
+            # Validate exit conditions
+            for i, condition in enumerate(self.exit_conditions):
+                condition_errors = self._validate_exit_condition(i, condition)
+                errors.extend(condition_errors)
         
         if errors:
             error_message = f"Strategy '{self.name}' validation failed:\n" + "\n".join(f"  - {e}" for e in errors)
@@ -313,9 +338,11 @@ def load_strategy_from_yaml(file_path: Path) -> StrategyConfig:
             indicators=indicators,
             entry_conditions=entry_conditions,
             exit_conditions=exit_conditions,
-            position_size=data.get("position_size", 0),
-            max_position_size=data.get("max_position_size", 0),
-            risk_parameters=risk_parameters
+            position_size=data.get("position_size", 0.0),
+            max_position_size=data.get("max_position_size", 0.0),
+            risk_parameters=risk_parameters,
+            position_direction=data.get("position_direction", "long"),
+            strategy_type=data.get("strategy_type")
         )
         
         logger.info(f"Successfully loaded strategy '{strategy.name}' from {file_path}")

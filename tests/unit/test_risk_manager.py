@@ -71,14 +71,15 @@ async def test_buy_signal_exceeds_total_exposure(risk_manager):
     """Test that buy signal exceeding total exposure is rejected."""
     # Add existing positions
     await risk_manager.update_position("strategy1", "BTCUSDT", 500.0)
-    await risk_manager.update_position("strategy2", "ETHUSDT", 400.0)
+    await risk_manager.update_position("strategy2", "ETHUSDT", 450.0)
     
     # Try to add more that would exceed total exposure of 1000
+    # Use 60 to stay within position size limit (60 < 100) but exceed total exposure (950 + 60 = 1010 > 1000)
     signal = Signal(
         strategy_name="strategy3",
         symbol="SOLUSDT",
         side="buy",
-        quantity=150.0,  # Would make total 1050
+        quantity=60.0,  # Would make total 1010, exceeding 1000 limit
         price=None,
         timestamp=datetime.now(),
         reason="Test buy"
@@ -92,7 +93,7 @@ async def test_buy_signal_exceeds_total_exposure(risk_manager):
 
 @pytest.mark.asyncio
 async def test_sell_signal_no_position(risk_manager):
-    """Test that sell signal without position is rejected."""
+    """Test that sell signal without position is approved (opens short position)."""
     signal = Signal(
         strategy_name="test_strategy",
         symbol="BTCUSDT",
@@ -105,8 +106,9 @@ async def test_sell_signal_no_position(risk_manager):
     
     result = await risk_manager.validate_signal(signal)
     
-    assert result.approved is False
-    assert "no position" in result.reason.lower()
+    # With short position support, sell without position opens a short
+    assert result.approved is True
+    assert "approved" in result.reason.lower()
 
 
 @pytest.mark.asyncio
