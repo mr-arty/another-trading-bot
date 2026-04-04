@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Callable, Awaitable, Any
 import structlog
 
-from src.strategy.config import StrategyConfig, EntryCondition, ExitCondition
+from src.strategy.config import StrategyConfig, EntryCondition, ExitCondition, PriceNearLevelCondition
 from src.exchange.connector import MarketData
 from src.indicators.calculator import IndicatorCalculator
 
@@ -482,6 +482,113 @@ class StrategyEngine:
                 exc_info=True
             )
             return False, ""
+    
+    async def _evaluate_price_near_level_condition(
+        self,
+        condition: PriceNearLevelCondition,
+        state: StrategyState,
+        current_price: float
+    ) -> tuple[bool, str]:
+        """
+        Evaluate if price is near support or resistance level.
+        
+        Args:
+            condition: Price near level condition
+            state: Strategy state
+            current_price: Current market price
+            
+        Returns:
+            Tuple of (condition_met, reason_string)
+        """
+        config = state.config
+        
+        # Get the target level
+        if condition.level == "support":
+            if config.support_level is None:
+                logger.error(
+                    "missing_support_level",
+                    strategy=config.name,
+                    message="price_near_level condition requires support_level to be defined"
+                )
+                return False, "support_level not defined"
+            level_price = config.support_level
+            level_name = "support"
+        else:  # resistance
+            if config.resistance_level is None:
+                logger.error(
+                    "missing_resistance_level",
+                    strategy=config.name,
+                    message="price_near_level condition requires resistance_level to be defined"
+                )
+                return False, "resistance_level not defined"
+            level_price = config.resistance_level
+            level_name = "resistance"
+        
+        # Calculate distance as percentage
+        distance_percent = abs(current_price - level_price) / level_price * 100
+        
+        # Check if within proximity threshold
+        proximity_threshold = config.level_proximity_percent
+        is_near = distance_percent <= proximity_threshold
+        
+        # Track proximity zone transitions for logging
+        pair_key = (config.name, config.symbol)
+        if pair_key not in self._pair_states:
+            self._pair_states[pair_key] = {}
+        
+        # Check if this is a zone entry/exit
+        was_near_key = f"was_near_{level_name}"
+        was_near = self._pair_states[pair_key].get(was_near_key, False)
+        
+        if is_near and not was_near:
+            # Entering proximity zone
+            logger.info(
+                "entering_level_proximity",
+                strategy=config.name,
+                symbol=config.symbol,
+                level=level_name,
+                level_price=level_price,
+                current_price=current_price,
+                distance_percent=round(distance_percent, 3),
+                threshold_percent=proximity_threshold
+            )
+            self._pair_states[pair_key][was_near_key] = True
+        elif not is_near and was_near:
+            # Exiting proximity zone
+            logger.info(
+                "exiting_level_proximity",
+                strategy=config.name,
+                symbol=config.symbol,
+                level=level_name,
+                level_price=level_price,
+                current_price=current_price,
+                distance_percent=round(distance_percent, 3),
+                threshold_percent=proximity_threshold
+            )
+            self._pair_states[pair_key][was_near_key] = False
+        
+        # Build reason string
+        if is_near:
+            reason = (
+                f"Price {current_price:.2f} within {distance_percent:.2f}% "
+                f"of {level_name} {level_price:.2f}"
+            )
+        else:
+            reason = (
+                f"Price {current_price:.2f} is {distance_percent:.2f}% "
+                f"from {level_name} {level_price:.2f} (threshold: {proximity_threshold}%)"
+            )
+        
+        logger.debug(
+            "price_near_level_evaluated",
+            strategy=config.name,
+            level=level_name,
+            is_near=is_near,
+            distance_percent=round(distance_percent, 3),
+            reason=reason
+        )
+        
+        return is_near, reason
     
     async def _evaluate_exit_conditions(
         self,

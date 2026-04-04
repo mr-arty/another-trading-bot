@@ -3,7 +3,7 @@
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import yaml
 
 
@@ -33,6 +33,23 @@ class EntryCondition:
 
 
 @dataclass
+class PriceNearLevelCondition:
+    """Condition that checks if price is near support or resistance level."""
+    type: str  # Must be "price_near_level"
+    level: str  # "support" or "resistance"
+    description: Optional[str] = None
+    
+    def __post_init__(self):
+        """Validate condition parameters."""
+        if self.type != "price_near_level":
+            raise ValueError(f"Invalid type for PriceNearLevelCondition: {self.type}")
+        if self.level not in ["support", "resistance"]:
+            raise ValueError(
+                f"level must be 'support' or 'resistance', got '{self.level}'"
+            )
+
+
+@dataclass
 class ExitCondition:
     """Configuration for an exit condition."""
     type: str  # 'take_profit', 'stop_loss', 'time_exceeds', 'support_resistance', 'end_of_day'
@@ -58,7 +75,7 @@ class StrategyConfig:
     symbol: str
     timeframes: List[str]
     indicators: Dict[str, IndicatorConfig]
-    entry_conditions: List[EntryCondition] = field(default_factory=list)
+    entry_conditions: List[Union[EntryCondition, PriceNearLevelCondition]] = field(default_factory=list)
     exit_conditions: List[ExitCondition] = field(default_factory=list)
     position_size: float = 0.0
     max_position_size: float = 0.0
@@ -177,10 +194,20 @@ class StrategyConfig:
         
         return errors
     
-    def _validate_entry_condition(self, index: int, condition: EntryCondition) -> List[str]:
+    def _validate_entry_condition(self, index: int, condition: Union[EntryCondition, PriceNearLevelCondition]) -> List[str]:
         """Validate an entry condition."""
         errors = []
         
+        # Handle PriceNearLevelCondition
+        if isinstance(condition, PriceNearLevelCondition):
+            # Validation is done in __post_init__, just check if required levels are defined
+            if condition.level == "support" and self.support_level is None:
+                errors.append(f"Entry condition {index}: price_near_level with level='support' requires support_level to be defined")
+            if condition.level == "resistance" and self.resistance_level is None:
+                errors.append(f"Entry condition {index}: price_near_level with level='resistance' requires resistance_level to be defined")
+            return errors
+        
+        # Handle EntryCondition
         valid_types = ["less_than", "greater_than", "cross_above", "cross_below"]
         if condition.type not in valid_types:
             errors.append(f"Entry condition {index}: type must be one of {valid_types}")
@@ -361,14 +388,22 @@ def load_strategy_from_yaml(file_path: Path) -> StrategyConfig:
         # Parse entry conditions
         entry_conditions = []
         for condition_data in data.get("entry_conditions", []):
-            entry_conditions.append(EntryCondition(
-                type=condition_data.get("type"),
-                indicator=condition_data.get("indicator"),
-                indicator1=condition_data.get("indicator1"),
-                indicator2=condition_data.get("indicator2"),
-                value=condition_data.get("value"),
-                description=condition_data.get("description")
-            ))
+            # Check if this is a price_near_level condition
+            if condition_data.get("type") == "price_near_level":
+                entry_conditions.append(PriceNearLevelCondition(
+                    type=condition_data.get("type"),
+                    level=condition_data.get("level"),
+                    description=condition_data.get("description")
+                ))
+            else:
+                entry_conditions.append(EntryCondition(
+                    type=condition_data.get("type"),
+                    indicator=condition_data.get("indicator"),
+                    indicator1=condition_data.get("indicator1"),
+                    indicator2=condition_data.get("indicator2"),
+                    value=condition_data.get("value"),
+                    description=condition_data.get("description")
+                ))
         
         # Parse exit conditions
         exit_conditions = []
@@ -404,7 +439,10 @@ def load_strategy_from_yaml(file_path: Path) -> StrategyConfig:
             max_position_size=data.get("max_position_size", 0.0),
             risk_parameters=risk_parameters,
             position_direction=data.get("position_direction", "long"),
-            strategy_type=data.get("strategy_type")
+            strategy_type=data.get("strategy_type"),
+            support_level=data.get("support_level"),
+            resistance_level=data.get("resistance_level"),
+            level_proximity_percent=data.get("level_proximity_percent", 0.5)
         )
         
         logger.info(f"Successfully loaded strategy '{strategy.name}' from {file_path}")

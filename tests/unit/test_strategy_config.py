@@ -443,3 +443,189 @@ def test_proximity_percent_validation():
             resistance_level=72000.0,
             level_proximity_percent=0.0
         )
+
+
+def test_price_near_level_condition_creation():
+    """Test creating PriceNearLevelCondition with valid parameters."""
+    from src.strategy.config import PriceNearLevelCondition
+    
+    # Valid condition for support
+    condition = PriceNearLevelCondition(
+        type="price_near_level",
+        level="support",
+        description="Price near support level"
+    )
+    assert condition.type == "price_near_level"
+    assert condition.level == "support"
+    assert condition.description == "Price near support level"
+    
+    # Valid condition for resistance
+    condition = PriceNearLevelCondition(
+        type="price_near_level",
+        level="resistance"
+    )
+    assert condition.type == "price_near_level"
+    assert condition.level == "resistance"
+    assert condition.description is None
+
+
+def test_price_near_level_condition_invalid_type():
+    """Test that PriceNearLevelCondition rejects invalid type."""
+    from src.strategy.config import PriceNearLevelCondition
+    
+    with pytest.raises(ValueError, match="Invalid type for PriceNearLevelCondition"):
+        PriceNearLevelCondition(
+            type="invalid_type",
+            level="support"
+        )
+
+
+def test_price_near_level_condition_invalid_level():
+    """Test that PriceNearLevelCondition rejects invalid level values."""
+    from src.strategy.config import PriceNearLevelCondition
+    
+    # Invalid level value
+    with pytest.raises(ValueError, match="level must be 'support' or 'resistance'"):
+        PriceNearLevelCondition(
+            type="price_near_level",
+            level="invalid"
+        )
+    
+    # Empty level
+    with pytest.raises(ValueError, match="level must be 'support' or 'resistance'"):
+        PriceNearLevelCondition(
+            type="price_near_level",
+            level=""
+        )
+
+
+def test_strategy_with_price_near_level_condition():
+    """Test creating a strategy with price_near_level condition."""
+    from src.strategy.config import PriceNearLevelCondition
+    
+    config = StrategyConfig(
+        name="test_range",
+        symbol="BTCUSDT",
+        timeframes=["4h"],
+        indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+        entry_conditions=[
+            EntryCondition(type="less_than", indicator="rsi", value=30),
+            PriceNearLevelCondition(type="price_near_level", level="support")
+        ],
+        exit_conditions=[ExitCondition(type="take_profit", percent=2.0)],
+        position_size=0.01,
+        max_position_size=0.05,
+        support_level=68000.0,
+        resistance_level=72000.0
+    )
+    
+    assert len(config.entry_conditions) == 2
+    assert isinstance(config.entry_conditions[0], EntryCondition)
+    assert isinstance(config.entry_conditions[1], PriceNearLevelCondition)
+    assert config.entry_conditions[1].level == "support"
+
+
+def test_price_near_level_condition_requires_level_defined():
+    """Test that price_near_level condition requires corresponding level to be defined."""
+    from src.strategy.config import PriceNearLevelCondition
+    
+    # Missing support_level when condition requires it
+    with pytest.raises(ValueError, match="requires support_level to be defined"):
+        StrategyConfig(
+            name="test_range",
+            symbol="BTCUSDT",
+            timeframes=["4h"],
+            indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+            entry_conditions=[
+                PriceNearLevelCondition(type="price_near_level", level="support")
+            ],
+            exit_conditions=[ExitCondition(type="take_profit", percent=2.0)],
+            position_size=0.01,
+            max_position_size=0.05,
+            resistance_level=72000.0  # Only resistance defined, not support
+        )
+    
+    # Missing resistance_level when condition requires it
+    with pytest.raises(ValueError, match="requires resistance_level to be defined"):
+        StrategyConfig(
+            name="test_range",
+            symbol="BTCUSDT",
+            timeframes=["4h"],
+            indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+            entry_conditions=[
+                PriceNearLevelCondition(type="price_near_level", level="resistance")
+            ],
+            exit_conditions=[ExitCondition(type="take_profit", percent=2.0)],
+            position_size=0.01,
+            max_position_size=0.05,
+            support_level=68000.0  # Only support defined, not resistance
+        )
+
+
+def test_load_strategy_with_price_near_level_from_yaml(tmp_path):
+    """Test loading a strategy with price_near_level condition from YAML."""
+    # Create a temporary YAML file
+    yaml_content = """
+name: test_range_strategy
+symbol: BTCUSDT
+timeframes:
+  - 4h
+position_size: 0.01
+max_position_size: 0.05
+support_level: 68000.0
+resistance_level: 72000.0
+level_proximity_percent: 0.5
+
+indicators:
+  rsi_4h:
+    type: rsi
+    timeframe: 4h
+    period: 14
+    oversold: 30
+    overbought: 70
+
+entry_conditions:
+  - type: less_than
+    indicator: rsi_4h
+    value: 30
+    description: RSI oversold
+  
+  - type: price_near_level
+    level: support
+    description: Price near support
+
+exit_conditions:
+  - type: take_profit
+    percent: 2.0
+  - type: stop_loss
+    percent: 1.0
+"""
+    
+    yaml_file = tmp_path / "test_range.yaml"
+    yaml_file.write_text(yaml_content)
+    
+    # Load the strategy
+    strategy = load_strategy_from_yaml(yaml_file)
+    
+    # Verify basic fields
+    assert strategy.name == "test_range_strategy"
+    assert strategy.symbol == "BTCUSDT"
+    assert strategy.support_level == 68000.0
+    assert strategy.resistance_level == 72000.0
+    assert strategy.level_proximity_percent == 0.5
+    
+    # Verify entry conditions
+    assert len(strategy.entry_conditions) == 2
+    
+    # First condition should be EntryCondition
+    assert isinstance(strategy.entry_conditions[0], EntryCondition)
+    assert strategy.entry_conditions[0].type == "less_than"
+    assert strategy.entry_conditions[0].indicator == "rsi_4h"
+    assert strategy.entry_conditions[0].value == 30
+    
+    # Second condition should be PriceNearLevelCondition
+    from src.strategy.config import PriceNearLevelCondition
+    assert isinstance(strategy.entry_conditions[1], PriceNearLevelCondition)
+    assert strategy.entry_conditions[1].type == "price_near_level"
+    assert strategy.entry_conditions[1].level == "support"
+    assert strategy.entry_conditions[1].description == "Price near support"
