@@ -420,3 +420,583 @@ async def test_signal_metadata_completeness(indicator_calculator, sample_strateg
     assert signal.timestamp is not None
     assert signal.reason is not None
     assert len(signal.reason) > 0
+
+
+# ============================================================================
+# Price Near Level Condition Tests (Task 6)
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_price_within_proximity_threshold(indicator_calculator):
+    """Test 6.1: Price within proximity threshold should return True."""
+    from src.strategy.config import PriceNearLevelCondition
+    
+    config = StrategyConfig(
+        name="test_range",
+        symbol="BTCUSDT",
+        timeframes=["4h"],
+        indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+        entry_conditions=[
+            EntryCondition(type="less_than", indicator="rsi", value=30)
+        ],
+        exit_conditions=[
+            ExitCondition(type="take_profit", percent=2.0)
+        ],
+        position_size=0.01,
+        max_position_size=0.05,
+        support_level=68000.0,
+        resistance_level=72000.0,
+        level_proximity_percent=0.5
+    )
+    
+    state = StrategyState(config=config)
+    engine = StrategyEngine(indicator_calculator)
+    
+    condition = PriceNearLevelCondition(
+        type="price_near_level",
+        level="support"
+    )
+    
+    # Price at 68200 is 0.29% from support (68000)
+    # Distance: abs(68200 - 68000) / 68000 * 100 = 0.294%
+    met, reason = await engine._evaluate_price_near_level_condition(
+        condition, state, 68200.0
+    )
+    
+    assert met is True
+    assert "within" in reason.lower()
+    assert "68200" in reason
+    assert "support" in reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_price_outside_proximity_threshold(indicator_calculator):
+    """Test 6.2: Price outside proximity threshold should return False."""
+    from src.strategy.config import PriceNearLevelCondition
+    
+    config = StrategyConfig(
+        name="test_range",
+        symbol="BTCUSDT",
+        timeframes=["4h"],
+        indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+        entry_conditions=[
+            EntryCondition(type="less_than", indicator="rsi", value=30)
+        ],
+        exit_conditions=[
+            ExitCondition(type="take_profit", percent=2.0)
+        ],
+        position_size=0.01,
+        max_position_size=0.05,
+        support_level=68000.0,
+        resistance_level=72000.0,
+        level_proximity_percent=0.5
+    )
+    
+    state = StrategyState(config=config)
+    engine = StrategyEngine(indicator_calculator)
+    
+    condition = PriceNearLevelCondition(
+        type="price_near_level",
+        level="support"
+    )
+    
+    # Price at 69000 is 1.47% from support (68000)
+    # Distance: abs(69000 - 68000) / 68000 * 100 = 1.47%
+    met, reason = await engine._evaluate_price_near_level_condition(
+        condition, state, 69000.0
+    )
+    
+    assert met is False
+    assert "from" in reason.lower()
+    assert "69000" in reason
+    assert "threshold" in reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_price_exactly_at_level(indicator_calculator):
+    """Test 6.3: Price exactly at level should return True."""
+    from src.strategy.config import PriceNearLevelCondition
+    
+    config = StrategyConfig(
+        name="test_range",
+        symbol="BTCUSDT",
+        timeframes=["4h"],
+        indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+        entry_conditions=[
+            EntryCondition(type="less_than", indicator="rsi", value=30)
+        ],
+        exit_conditions=[
+            ExitCondition(type="take_profit", percent=2.0)
+        ],
+        position_size=0.01,
+        max_position_size=0.05,
+        support_level=68000.0,
+        resistance_level=72000.0,
+        level_proximity_percent=0.5
+    )
+    
+    state = StrategyState(config=config)
+    engine = StrategyEngine(indicator_calculator)
+    
+    condition = PriceNearLevelCondition(
+        type="price_near_level",
+        level="support"
+    )
+    
+    # Price exactly at support level (distance = 0%)
+    met, reason = await engine._evaluate_price_near_level_condition(
+        condition, state, 68000.0
+    )
+    
+    assert met is True
+    assert "within" in reason.lower()
+    assert "0.00%" in reason
+
+
+@pytest.mark.asyncio
+async def test_support_level_evaluation(indicator_calculator):
+    """Test 6.4: Support level evaluation."""
+    from src.strategy.config import PriceNearLevelCondition
+    
+    config = StrategyConfig(
+        name="test_range",
+        symbol="BTCUSDT",
+        timeframes=["4h"],
+        indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+        entry_conditions=[
+            EntryCondition(type="less_than", indicator="rsi", value=30)
+        ],
+        exit_conditions=[
+            ExitCondition(type="take_profit", percent=2.0)
+        ],
+        position_size=0.01,
+        max_position_size=0.05,
+        support_level=68000.0,
+        resistance_level=72000.0,
+        level_proximity_percent=0.5
+    )
+    
+    state = StrategyState(config=config)
+    engine = StrategyEngine(indicator_calculator)
+    
+    condition = PriceNearLevelCondition(
+        type="price_near_level",
+        level="support"
+    )
+    
+    # Test price near support
+    met, reason = await engine._evaluate_price_near_level_condition(
+        condition, state, 68100.0
+    )
+    
+    assert met is True
+    assert "support" in reason.lower()
+    assert "68000" in reason  # Support level mentioned
+
+
+@pytest.mark.asyncio
+async def test_resistance_level_evaluation(indicator_calculator):
+    """Test 6.5: Resistance level evaluation."""
+    from src.strategy.config import PriceNearLevelCondition
+    
+    config = StrategyConfig(
+        name="test_range",
+        symbol="BTCUSDT",
+        timeframes=["4h"],
+        indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+        entry_conditions=[
+            EntryCondition(type="less_than", indicator="rsi", value=30)
+        ],
+        exit_conditions=[
+            ExitCondition(type="take_profit", percent=2.0)
+        ],
+        position_size=0.01,
+        max_position_size=0.05,
+        support_level=68000.0,
+        resistance_level=72000.0,
+        level_proximity_percent=0.5
+    )
+    
+    state = StrategyState(config=config)
+    engine = StrategyEngine(indicator_calculator)
+    
+    condition = PriceNearLevelCondition(
+        type="price_near_level",
+        level="resistance"
+    )
+    
+    # Test price near resistance
+    met, reason = await engine._evaluate_price_near_level_condition(
+        condition, state, 71900.0
+    )
+    
+    assert met is True
+    assert "resistance" in reason.lower()
+    assert "72000" in reason  # Resistance level mentioned
+
+
+@pytest.mark.asyncio
+async def test_proximity_zone_entry_logging(indicator_calculator, capsys):
+    """Test 6.6: Proximity zone entry logging."""
+    from src.strategy.config import PriceNearLevelCondition
+    
+    config = StrategyConfig(
+        name="test_range",
+        symbol="BTCUSDT",
+        timeframes=["4h"],
+        indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+        entry_conditions=[
+            EntryCondition(type="less_than", indicator="rsi", value=30)
+        ],
+        exit_conditions=[
+            ExitCondition(type="take_profit", percent=2.0)
+        ],
+        position_size=0.01,
+        max_position_size=0.05,
+        support_level=68000.0,
+        resistance_level=72000.0,
+        level_proximity_percent=0.5
+    )
+    
+    state = StrategyState(config=config)
+    engine = StrategyEngine(indicator_calculator)
+    
+    condition = PriceNearLevelCondition(
+        type="price_near_level",
+        level="support"
+    )
+    
+    # First call - price far from support (not in zone)
+    await engine._evaluate_price_near_level_condition(
+        condition, state, 70000.0
+    )
+    
+    # Second call - price enters proximity zone
+    await engine._evaluate_price_near_level_condition(
+        condition, state, 68200.0
+    )
+    
+    # Check that entering_level_proximity was logged
+    captured = capsys.readouterr()
+    assert "entering_level_proximity" in captured.out
+
+
+@pytest.mark.asyncio
+async def test_proximity_zone_exit_logging(indicator_calculator, capsys):
+    """Test 6.7: Proximity zone exit logging."""
+    from src.strategy.config import PriceNearLevelCondition
+    
+    config = StrategyConfig(
+        name="test_range",
+        symbol="BTCUSDT",
+        timeframes=["4h"],
+        indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+        entry_conditions=[
+            EntryCondition(type="less_than", indicator="rsi", value=30)
+        ],
+        exit_conditions=[
+            ExitCondition(type="take_profit", percent=2.0)
+        ],
+        position_size=0.01,
+        max_position_size=0.05,
+        support_level=68000.0,
+        resistance_level=72000.0,
+        level_proximity_percent=0.5
+    )
+    
+    state = StrategyState(config=config)
+    engine = StrategyEngine(indicator_calculator)
+    
+    condition = PriceNearLevelCondition(
+        type="price_near_level",
+        level="support"
+    )
+    
+    # First call - price in proximity zone
+    await engine._evaluate_price_near_level_condition(
+        condition, state, 68200.0
+    )
+    
+    # Second call - price exits proximity zone
+    await engine._evaluate_price_near_level_condition(
+        condition, state, 70000.0
+    )
+    
+    # Check that exiting_level_proximity was logged
+    captured = capsys.readouterr()
+    assert "exiting_level_proximity" in captured.out
+
+
+@pytest.mark.asyncio
+async def test_reason_string_format(indicator_calculator):
+    """Test 6.8: Reason string format."""
+    from src.strategy.config import PriceNearLevelCondition
+    
+    config = StrategyConfig(
+        name="test_range",
+        symbol="BTCUSDT",
+        timeframes=["4h"],
+        indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+        entry_conditions=[
+            EntryCondition(type="less_than", indicator="rsi", value=30)
+        ],
+        exit_conditions=[
+            ExitCondition(type="take_profit", percent=2.0)
+        ],
+        position_size=0.01,
+        max_position_size=0.05,
+        support_level=68000.0,
+        resistance_level=72000.0,
+        level_proximity_percent=0.5
+    )
+    
+    state = StrategyState(config=config)
+    engine = StrategyEngine(indicator_calculator)
+    
+    condition = PriceNearLevelCondition(
+        type="price_near_level",
+        level="support"
+    )
+    
+    # Test reason when condition is met
+    met, reason = await engine._evaluate_price_near_level_condition(
+        condition, state, 68200.0
+    )
+    
+    assert met is True
+    # Reason should include: current price, distance %, level type, level price
+    assert "68200.00" in reason
+    assert "%" in reason
+    assert "support" in reason.lower()
+    assert "68000.00" in reason
+    assert "within" in reason.lower()
+    
+    # Test reason when condition is not met
+    met, reason = await engine._evaluate_price_near_level_condition(
+        condition, state, 70000.0
+    )
+    
+    assert met is False
+    assert "70000.00" in reason
+    assert "%" in reason
+    assert "support" in reason.lower()
+    assert "68000.00" in reason
+    assert "from" in reason.lower()
+    assert "threshold" in reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_missing_support_level_handling(indicator_calculator, capsys):
+    """Test 6.9: Missing level handling."""
+    from src.strategy.config import PriceNearLevelCondition
+    
+    # Config without support_level defined
+    config = StrategyConfig(
+        name="test_range",
+        symbol="BTCUSDT",
+        timeframes=["4h"],
+        indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+        entry_conditions=[
+            EntryCondition(type="less_than", indicator="rsi", value=30)
+        ],
+        exit_conditions=[
+            ExitCondition(type="take_profit", percent=2.0)
+        ],
+        position_size=0.01,
+        max_position_size=0.05,
+        support_level=None,  # Not defined
+        resistance_level=72000.0,
+        level_proximity_percent=0.5
+    )
+    
+    state = StrategyState(config=config)
+    engine = StrategyEngine(indicator_calculator)
+    
+    condition = PriceNearLevelCondition(
+        type="price_near_level",
+        level="support"
+    )
+    
+    # Should return False and log error
+    met, reason = await engine._evaluate_price_near_level_condition(
+        condition, state, 68200.0
+    )
+    
+    assert met is False
+    assert "not defined" in reason.lower()
+    
+    # Check error was logged
+    captured = capsys.readouterr()
+    assert "missing_support_level" in captured.out
+
+
+@pytest.mark.asyncio
+async def test_missing_resistance_level_handling(indicator_calculator, capsys):
+    """Test 6.9: Missing resistance level handling."""
+    from src.strategy.config import PriceNearLevelCondition
+    
+    # Config without resistance_level defined
+    config = StrategyConfig(
+        name="test_range",
+        symbol="BTCUSDT",
+        timeframes=["4h"],
+        indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+        entry_conditions=[
+            EntryCondition(type="less_than", indicator="rsi", value=30)
+        ],
+        exit_conditions=[
+            ExitCondition(type="take_profit", percent=2.0)
+        ],
+        position_size=0.01,
+        max_position_size=0.05,
+        support_level=68000.0,
+        resistance_level=None,  # Not defined
+        level_proximity_percent=0.5
+    )
+    
+    state = StrategyState(config=config)
+    engine = StrategyEngine(indicator_calculator)
+    
+    condition = PriceNearLevelCondition(
+        type="price_near_level",
+        level="resistance"
+    )
+    
+    # Should return False and log error
+    met, reason = await engine._evaluate_price_near_level_condition(
+        condition, state, 71900.0
+    )
+    
+    assert met is False
+    assert "not defined" in reason.lower()
+    
+    # Check error was logged
+    captured = capsys.readouterr()
+    assert "missing_resistance_level" in captured.out
+
+
+@pytest.mark.asyncio
+async def test_distance_calculation_accuracy(indicator_calculator):
+    """Test 6.10: Distance calculation accuracy to 0.01%."""
+    from src.strategy.config import PriceNearLevelCondition
+    
+    config = StrategyConfig(
+        name="test_range",
+        symbol="BTCUSDT",
+        timeframes=["4h"],
+        indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+        entry_conditions=[
+            EntryCondition(type="less_than", indicator="rsi", value=30)
+        ],
+        exit_conditions=[
+            ExitCondition(type="take_profit", percent=2.0)
+        ],
+        position_size=0.01,
+        max_position_size=0.05,
+        support_level=68000.0,
+        resistance_level=72000.0,
+        level_proximity_percent=0.5
+    )
+    
+    state = StrategyState(config=config)
+    engine = StrategyEngine(indicator_calculator)
+    
+    condition = PriceNearLevelCondition(
+        type="price_near_level",
+        level="support"
+    )
+    
+    # Test various prices and verify distance calculation
+    test_cases = [
+        # (current_price, expected_distance_percent, should_be_near)
+        (68000.0, 0.00, True),      # Exactly at level
+        (68100.0, 0.147, True),     # 100 above: 100/68000*100 = 0.147%
+        (68340.0, 0.50, True),      # Exactly at threshold: 340/68000*100 = 0.50%
+        (68341.0, 0.501, False),    # Just above threshold
+        (67660.0, 0.50, True),      # 340 below: 340/68000*100 = 0.50%
+        (67659.0, 0.501, False),    # Just below threshold
+    ]
+    
+    for current_price, expected_distance, should_be_near in test_cases:
+        met, reason = await engine._evaluate_price_near_level_condition(
+            condition, state, current_price
+        )
+        
+        # Extract distance from reason string
+        # Format: "Price X within/is Y% of/from support Z"
+        import re
+        match = re.search(r'(\d+\.\d+)%', reason)
+        assert match is not None, f"Could not find distance in reason: {reason}"
+        
+        actual_distance = float(match.group(1))
+        
+        # Verify accuracy to 0.01%
+        assert abs(actual_distance - expected_distance) < 0.01, \
+            f"Distance calculation inaccurate for price {current_price}: " \
+            f"expected {expected_distance}%, got {actual_distance}%"
+        
+        # Verify condition result
+        assert met == should_be_near, \
+            f"Condition result incorrect for price {current_price}: " \
+            f"expected {should_be_near}, got {met}"
+
+
+@pytest.mark.asyncio
+async def test_price_near_level_integration_with_entry_conditions(indicator_calculator):
+    """Test price near level condition integrated with other entry conditions."""
+    from src.strategy.config import PriceNearLevelCondition
+    
+    signals_received = []
+    
+    async def signal_callback(signal: Signal):
+        signals_received.append(signal)
+    
+    engine = StrategyEngine(indicator_calculator, signal_callback)
+    
+    # Create strategy with both RSI and price near level conditions
+    config = StrategyConfig(
+        name="range_strategy",
+        symbol="BTCUSDT",
+        timeframes=["4h"],
+        indicators={
+            "rsi_4h": IndicatorConfig(type="rsi", timeframe="4h", period=14)
+        },
+        entry_conditions=[
+            EntryCondition(type="less_than", indicator="rsi_4h", value=30),
+            PriceNearLevelCondition(type="price_near_level", level="support")
+        ],
+        exit_conditions=[
+            ExitCondition(type="take_profit", percent=2.0)
+        ],
+        position_size=0.01,
+        max_position_size=0.05,
+        support_level=68000.0,
+        resistance_level=72000.0,
+        level_proximity_percent=0.5
+    )
+    
+    await engine.register_strategy(config)
+    
+    # Mock indicator calculations
+    indicator_calculator.add_market_data = AsyncMock()
+    indicator_calculator.calculate_rsi = AsyncMock(return_value=25.0)  # RSI < 30
+    
+    # Market data with price near support
+    market_data = MarketData(
+        symbol="BTCUSDT",
+        timestamp=datetime.now(),
+        open=68100.0,
+        high=68200.0,
+        low=68000.0,
+        close=68150.0,  # Within 0.5% of support
+        volume=100.0
+    )
+    
+    await engine.process_market_data(market_data)
+    
+    # Should generate buy signal (both conditions met)
+    assert len(signals_received) == 1
+    signal = signals_received[0]
+    assert signal.side == "buy"
+    assert "rsi" in signal.reason.lower()
+    assert "support" in signal.reason.lower()
