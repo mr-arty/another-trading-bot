@@ -10,13 +10,22 @@ The range trading strategy is designed to profit from price oscillations within 
 
 **Long Entry (Buy)**:
 - RSI (4h) < 30 (oversold)
-- Price near support level
+- Price near support level (automatically detected within 0.5% by default)
 - Opens a long position expecting price to bounce up
 
 **Short Entry (Sell)**:
 - RSI (4h) > 70 (overbought)  
-- Price near resistance level
+- Price near resistance level (automatically detected within 0.5% by default)
 - Opens a short position expecting price to drop
+
+### Automatic Price Proximity Detection
+
+The bot automatically monitors when price is near your defined support or resistance levels:
+
+- **Proximity threshold**: Configurable via `level_proximity_percent` (default: 0.5%)
+- **Automatic logging**: Bot logs when price enters/exits proximity zones
+- **Combined conditions**: Entry signals only generated when BOTH RSI AND proximity conditions are met
+- **No manual monitoring needed**: The bot handles all proximity detection automatically
 
 ### Exit Conditions
 
@@ -27,7 +36,7 @@ The range trading strategy is designed to profit from price oscillations within 
 
 **Stop Loss**:
 - 2% stop loss to protect against range breakouts
-- 24-hour time limit to avoid holding through structural changes
+- 72-hour time limit to avoid holding through structural changes
 
 ## Setup Instructions
 
@@ -53,10 +62,25 @@ Edit `strategies/range_trading_strategy.yaml`:
 support_level: 68000.0      # Your support level
 resistance_level: 72000.0   # Your resistance level
 
+# Optional: Adjust proximity threshold (default: 0.5%)
+level_proximity_percent: 0.5  # Price within 0.5% of level
+
+# Entry conditions - bot automatically detects proximity
+entry_conditions:
+  - type: "less_than"
+    indicator: "rsi_4h"
+    value: 30
+    description: "RSI below 30 (oversold)"
+  
+  - type: "price_near_level"
+    level: "support"
+    description: "Price within 0.5% of support level"
+
 # Update exit conditions with mid-range
 exit_conditions:
   - type: "support_resistance"
     price: 70000.0  # (support + resistance) / 2
+    direction: "above"
 ```
 
 ### 3. Validate the Range
@@ -71,10 +95,15 @@ Good ranges have these characteristics:
 
 The bot will automatically:
 - Monitor RSI on 4-hour timeframe
-- Generate long signals when RSI < 30
-- Generate short signals when RSI > 70
+- Detect when price is near support/resistance levels
+- Generate long signals when RSI < 30 AND price near support
+- Generate short signals when RSI > 70 AND price near resistance
+- Log proximity zone entry/exit events for debugging
 
-**Important**: You should manually verify that price is actually near the support/resistance levels when signals are generated.
+Check the logs to see proximity detection in action:
+```
+entering_level_proximity: strategy=btc_range_trading, level=support, current_price=68200, distance_percent=0.29%
+```
 
 ## Risk Management
 
@@ -99,12 +128,14 @@ The bot will automatically:
 - Clear support and resistance levels
 - Low volatility environment
 - Multiple bounces at range boundaries
+- Price respecting the defined levels
 
 ### Bad Conditions ❌
 - Strong trending market (up or down)
 - Range breakout in progress
 - High volatility / news events
 - Unclear support/resistance levels
+- Frequent false breakouts
 
 ## Monitoring and Maintenance
 
@@ -152,20 +183,53 @@ The bot will automatically:
 6. Loss: 2% (1,364 / 68,200)
 ```
 
-## Current Limitations
+## Automatic Level Detection Features
 
-The current bot implementation has some limitations for range trading:
+The bot includes sophisticated automatic price proximity detection:
 
-1. **Manual level monitoring**: You need to manually verify price is near support/resistance when RSI signals trigger
-2. **Static levels**: Support/resistance levels must be manually updated in the YAML file
-3. **No dynamic range detection**: The bot doesn't automatically detect or adjust ranges
+### How It Works
 
-### Workarounds
+1. **Distance Calculation**: The bot continuously calculates the percentage distance from current price to your defined levels:
+   ```
+   distance_percent = abs(current_price - level_price) / level_price * 100
+   ```
 
-1. **Use price alerts**: Set alerts on your exchange at support/resistance levels
-2. **Regular updates**: Update the YAML file weekly or when range shifts
-3. **Manual confirmation**: Check price action before allowing trades to execute
-4. **Test mode first**: Run in test mode to see signal frequency before live trading
+2. **Proximity Threshold**: You define how close is "near" using `level_proximity_percent` (default: 0.5%)
+
+3. **Zone Tracking**: The bot tracks when price enters and exits proximity zones:
+   - Logs `entering_level_proximity` when price moves within threshold
+   - Logs `exiting_level_proximity` when price moves outside threshold
+
+4. **Combined Conditions**: Entry signals only generated when ALL conditions are met:
+   - RSI condition (oversold/overbought)
+   - Price proximity condition (near support/resistance)
+
+### Example Log Output
+
+```
+[INFO] range_levels_configured: support=68000.0, resistance=72000.0, mid_range=70000.0, range_width_percent=5.88%
+[INFO] entering_level_proximity: strategy=btc_range_trading, level=support, level_price=68000.0, current_price=68200.0, distance_percent=0.29%, threshold_percent=0.5%
+[INFO] entry_signal_generated: strategy=btc_range_trading, side=buy, reason="RSI below 30 (oversold); Price 68200.00 within 0.29% of support 68000.00"
+[INFO] exiting_level_proximity: strategy=btc_range_trading, level=support, level_price=68000.0, current_price=69500.0, distance_percent=2.21%, threshold_percent=0.5%
+```
+
+### Configuration Options
+
+**Adjust Proximity Threshold**:
+```yaml
+level_proximity_percent: 0.3  # Tighter - only 0.3% from level
+level_proximity_percent: 1.0  # Looser - within 1% of level
+```
+
+**Valid Range**: 0.1% to 5.0%
+
+### Benefits
+
+- ✅ No manual price monitoring required
+- ✅ Precise entry timing at optimal levels
+- ✅ Clear logging for debugging and analysis
+- ✅ Prevents false signals when price is far from levels
+- ✅ Configurable sensitivity via proximity threshold
 
 ## Testing the Strategy
 
@@ -198,22 +262,130 @@ Only go live after:
 ## Troubleshooting
 
 ### No Signals Generated
-- Check if RSI is reaching extreme levels (< 30 or > 70)
-- Verify range is still valid
+
+**Check RSI Levels**:
+- Verify RSI is reaching extreme levels (< 30 or > 70)
+- Check logs for RSI values: `rsi_4h=28.5`
+- Consider adjusting thresholds if market conditions changed
+
+**Check Price Proximity**:
+- Look for `entering_level_proximity` log messages
+- If not appearing, price may not be reaching your levels
+- Verify support/resistance levels are still valid
+- Check distance_percent in logs to see how far price is from levels
+
+**Check Both Conditions**:
+- Entry requires BOTH RSI AND proximity conditions
+- Look for `entry_condition_not_met` debug logs
+- These show which specific condition failed
+
+**Verify Configuration**:
 - Ensure 4-hour candles are completing
-- Check logs for indicator calculation
+- Check that `price_near_level` condition is in entry_conditions
+- Verify `support_level` and `resistance_level` are defined
 
 ### Too Many Signals
-- Increase RSI thresholds (e.g., < 25 and > 75)
-- Widen the range boundaries
-- Increase min_time_between_trades
-- Add additional filters
+
+**Tighten Proximity Threshold**:
+```yaml
+level_proximity_percent: 0.3  # Reduce from 0.5% to 0.3%
+```
+
+**Adjust RSI Thresholds**:
+```yaml
+# More conservative
+- type: "less_than"
+  indicator: "rsi_4h"
+  value: 25  # Changed from 30
+```
+
+**Increase Trade Spacing**:
+```yaml
+risk_parameters:
+  min_time_between_trades: 14400  # 4 hours instead of 2
+```
+
+### Proximity Detection Not Working
+
+**Check Level Configuration**:
+```
+[ERROR] missing_support_level: price_near_level condition requires support_level to be defined
+```
+- Ensure `support_level` is defined in YAML
+- Ensure `resistance_level` is defined in YAML
+
+**Check Validation Errors**:
+```
+[ERROR] resistance_level must be greater than support_level
+```
+- Verify resistance > support
+- Check for typos in level values
+
+**Check Range Width Warnings**:
+```
+[WARNING] narrow_range_detected: range_width_percent=0.8%, message="Range width < 1% may result in frequent false signals"
+```
+- Consider widening the range
+- Or accept more frequent signals with narrow range
 
 ### Losses Exceeding Wins
-- Range may be breaking down
-- Support/resistance levels may need adjustment
-- Consider pausing strategy during high volatility
-- Review if market is trending instead of ranging
+
+**Range May Be Breaking Down**:
+- Check if price is breaking out of range
+- Look for trend formation on higher timeframes
+- Consider pausing strategy during breakouts
+
+**Levels Need Adjustment**:
+- Support/resistance may have shifted
+- Update levels based on recent price action
+- Check for new swing highs/lows
+
+**Market Conditions Changed**:
+- High volatility can invalidate ranges
+- News events can cause breakouts
+- Consider pausing during major announcements
+
+### Understanding Log Messages
+
+**Level Configuration**:
+```
+[INFO] range_levels_configured: support=68000.0, resistance=72000.0, mid_range=70000.0, range_width_percent=5.88%
+```
+- Confirms your levels loaded correctly
+- Shows calculated mid-range
+- Displays range width percentage
+
+**Proximity Zone Entry**:
+```
+[INFO] entering_level_proximity: strategy=btc_range_trading, level=support, level_price=68000.0, current_price=68200.0, distance_percent=0.29%, threshold_percent=0.5%
+```
+- Price moved within proximity threshold
+- Shows exact distance from level
+- Indicates proximity condition can now be met
+
+**Proximity Zone Exit**:
+```
+[INFO] exiting_level_proximity: strategy=btc_range_trading, level=support, current_price=69500.0, distance_percent=2.21%
+```
+- Price moved outside proximity threshold
+- Proximity condition no longer met
+- No entry signals will generate until price returns
+
+**Entry Signal Generated**:
+```
+[INFO] entry_signal_generated: strategy=btc_range_trading, side=buy, reason="RSI below 30 (oversold); Price 68200.00 within 0.29% of support 68000.00"
+```
+- All conditions met, signal generated
+- Shows which conditions triggered
+- Includes exact price and distance
+
+**Condition Not Met**:
+```
+[DEBUG] entry_condition_not_met: strategy=btc_range_trading, condition_type=price_near_level, reason="Price 69500.00 is 2.21% from support 68000.00 (threshold: 0.5%)"
+```
+- Shows why entry didn't trigger
+- Helps debug configuration issues
+- Indicates which condition failed
 
 ## Advanced Optimization
 

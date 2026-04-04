@@ -77,6 +77,36 @@ timeframes:
   - "1h"
 ```
 
+#### `support_level` (float, optional)
+Support price level for range trading strategies. Used with `price_near_level` entry conditions.
+
+```yaml
+support_level: 68000.0
+```
+
+#### `resistance_level` (float, optional)
+Resistance price level for range trading strategies. Used with `price_near_level` entry conditions.
+
+```yaml
+resistance_level: 72000.0
+```
+
+**Validation Rules**:
+- Both levels must be positive numbers
+- `resistance_level` must be greater than `support_level`
+- Range width is calculated as: `(resistance - support) / support * 100`
+- Bot warns if range width < 1% (too narrow) or > 20% (too wide)
+- Bot logs mid-range calculation: `(support + resistance) / 2`
+
+#### `level_proximity_percent` (float, optional)
+Defines how close price must be to a level to be considered "near" for `price_near_level` conditions. Defaults to 0.5%.
+
+```yaml
+level_proximity_percent: 0.5  # Price within 0.5% of level
+```
+
+**Valid Range**: 0.1% to 5.0%
+
 ## Indicators Section
 
 
@@ -284,6 +314,70 @@ entry_conditions_short:
   multiplier: 1.2
   indicator: "volume_avg"
 ```
+
+#### Price Near Level Conditions
+
+**`price_near_level`** - Price within proximity threshold of support or resistance level
+
+This condition checks if the current price is within a specified percentage distance from a support or resistance level. Used for range trading strategies to ensure entries occur only when price is actually near the target level.
+
+```yaml
+- type: "price_near_level"
+  level: "support"  # or "resistance"
+  description: "Price within 0.5% of support level"
+```
+
+**Parameters**:
+- `level` (required): Either "support" or "resistance"
+- `description` (optional): Human-readable description
+
+**Requirements**:
+- Strategy must define `support_level` (for level: "support")
+- Strategy must define `resistance_level` (for level: "resistance")
+- Uses `level_proximity_percent` from strategy config (default: 0.5%)
+
+**Calculation**:
+```
+distance_percent = abs(current_price - level_price) / level_price * 100
+condition_met = distance_percent <= level_proximity_percent
+```
+
+**Example - Long Entry at Support**:
+```yaml
+support_level: 68000.0
+level_proximity_percent: 0.5
+
+entry_conditions:
+  - type: "less_than"
+    indicator: "rsi_4h"
+    value: 30
+    description: "RSI oversold"
+  
+  - type: "price_near_level"
+    level: "support"
+    description: "Price within 0.5% of support"
+```
+
+**Example - Short Entry at Resistance**:
+```yaml
+resistance_level: 72000.0
+level_proximity_percent: 0.5
+
+entry_conditions:
+  - type: "greater_than"
+    indicator: "rsi_4h"
+    value: 70
+    description: "RSI overbought"
+  
+  - type: "price_near_level"
+    level: "resistance"
+    description: "Price within 0.5% of resistance"
+```
+
+**Logging**:
+- Bot logs when price enters proximity zone: `entering_level_proximity`
+- Bot logs when price exits proximity zone: `exiting_level_proximity`
+- Logs include: level name, level price, current price, distance percentage
 
 ## Exit Conditions Section
 
@@ -652,6 +746,130 @@ indicators:
 # 3. Calculate RSI and EMA indicators
 # 4. Log data reception with indicator values
 # 5. NOT generate any trading signals
+```
+
+## Complete Example: Range Trading Strategy with Automatic Level Detection
+
+```yaml
+name: "btc_range_trading"
+symbol: "BTCUSDT"
+strategy_type: "range_trading"
+position_direction: "long"  # Long position: buy on entry, sell on exit
+
+timeframes:
+  - "4h"
+
+# =============================================================================
+# SUPPORT AND RESISTANCE LEVELS
+# =============================================================================
+# Define your support and resistance levels based on technical analysis
+# The bot will automatically detect when price is near these levels
+support_level: 68000.0  # Support level - update based on your analysis
+resistance_level: 72000.0  # Resistance level - update based on your analysis
+
+# Level proximity threshold (optional, defaults to 0.5%)
+# Defines how close price must be to a level to be considered "near"
+# Example: 0.5% means price within 0.5% of the level triggers proximity detection
+level_proximity_percent: 0.5
+
+# Mid-range calculation: (68000 + 72000) / 2 = 70000
+# The bot will automatically calculate and log this on strategy load
+
+# =============================================================================
+# INDICATORS
+# =============================================================================
+indicators:
+  rsi_4h:
+    type: "rsi"
+    timeframe: "4h"
+    period: 14
+    oversold: 30
+    overbought: 70
+    description: "RSI on 4-hour chart for range extremes"
+
+# =============================================================================
+# ENTRY CONDITIONS
+# =============================================================================
+# Enter LONG when:
+# - RSI is below 30 (oversold)
+# - Price is near support level (within level_proximity_percent)
+#
+# Note: For short positions, create a separate strategy file with:
+# - RSI > 70 (overbought)
+# - Price near resistance level
+# - position_direction: "short"
+entry_conditions:
+  - type: "less_than"
+    indicator: "rsi_4h"
+    value: 30
+    description: "RSI below 30 (oversold)"
+  
+  - type: "price_near_level"
+    level: "support"
+    description: "Price within 0.5% of support level"
+
+# =============================================================================
+# EXIT CONDITIONS
+# =============================================================================
+# Exit when price reaches mid-range
+# Mid-range = (support_level + resistance_level) / 2 = (68000 + 72000) / 2 = 70000
+exit_conditions:
+  - type: "support_resistance"
+    price: 70000.0  # Mid-range level
+    direction: "above"  # For long positions, exit when price goes above mid-range
+    description: "Exit long at mid-range (take profit)"
+  
+  # Safety stop losses
+  - type: "stop_loss"
+    percent: 2.0
+    description: "Stop loss at 2% to protect against range breakout"
+  
+  # Time-based exit in case range doesn't play out
+  - type: "time_exceeds"
+    seconds: 259200  # 72 hours
+    description: "Exit after 72 hours if mid-range not reached"
+
+# =============================================================================
+# POSITION SIZING AND RISK MANAGEMENT
+# =============================================================================
+position_size: 0.001  # 0.001 BTC per trade
+max_position_size: 0.003  # Maximum 0.003 BTC total
+
+risk_parameters:
+  max_trades_per_day: 4  # Limit trades in ranging market
+  cooldown_after_loss: 3600  # 1 hour cooldown after loss
+  max_daily_loss_percent: 3.0
+  max_risk_per_trade_percent: 2.0
+  min_time_between_trades: 7200  # 2 hours between trades (4h timeframe)
+
+# =============================================================================
+# METADATA
+# =============================================================================
+metadata:
+  version: "2.0.0"
+  description: |
+    Range Trading Strategy for BTC/USDT with Automatic Level Detection (Long Positions)
+    
+    Strategy Logic:
+    - Trades within a defined price range (support to resistance)
+    - Uses 4-hour RSI to identify oversold conditions
+    - Automatically detects when price is near support
+    - Enters long at support when RSI < 30 AND price within 0.5% of support
+    - Exits at mid-range (halfway between support and resistance)
+    
+    Automatic Level Detection:
+    - The bot automatically monitors price proximity to levels
+    - Logs when price enters/exits proximity zones
+    - Entry signals only generated when BOTH conditions met:
+      * RSI condition (oversold)
+      * Price proximity condition (near support)
+    
+    Setup Instructions:
+    1. Identify current support and resistance levels on 4h chart
+    2. Update support_level and resistance_level in this file
+    3. Optionally adjust level_proximity_percent (default: 0.5%)
+    4. Calculate mid-range: (support + resistance) / 2
+    5. Update the exit condition prices to the mid-range value
 ```
 
 ## Validation Rules
