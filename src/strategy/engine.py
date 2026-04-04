@@ -357,6 +357,7 @@ class StrategyEngine:
             Buy signal for long strategies or sell signal for short strategies if conditions met, None otherwise
         """
         config = state.config
+        current_price = data.close
         
         # All entry conditions must be met
         all_met = True
@@ -366,13 +367,22 @@ class StrategyEngine:
             met, reason = await self._evaluate_entry_condition(
                 condition,
                 indicators,
-                state.previous_indicators
+                state.previous_indicators,
+                state,
+                current_price
             )
             
             if met:
                 reasons.append(reason)
             else:
                 all_met = False
+                # Log which condition failed
+                logger.debug(
+                    "entry_condition_not_met",
+                    strategy=config.name,
+                    condition_type=getattr(condition, 'type', 'unknown'),
+                    reason=reason
+                )
                 break
         
         if all_met:
@@ -396,6 +406,7 @@ class StrategyEngine:
                 symbol=config.symbol,
                 position_direction=config.position_direction,
                 side=signal_side,
+                price=current_price,
                 reason=signal.reason
             )
             
@@ -405,22 +416,35 @@ class StrategyEngine:
     
     async def _evaluate_entry_condition(
         self,
-        condition: EntryCondition,
+        condition,
         indicators: Dict[str, float],
-        previous_indicators: Dict[str, float]
+        previous_indicators: Dict[str, float],
+        state: StrategyState,
+        current_price: float
     ) -> tuple[bool, str]:
         """
         Evaluate a single entry condition.
         
         Args:
-            condition: Entry condition to evaluate
+            condition: Entry condition to evaluate (EntryCondition or PriceNearLevelCondition)
             indicators: Current indicator values
             previous_indicators: Previous indicator values (for cross detection)
+            state: Strategy state
+            current_price: Current market price
             
         Returns:
             Tuple of (condition_met, reason_string)
         """
         try:
+            # Handle PriceNearLevelCondition
+            if isinstance(condition, PriceNearLevelCondition):
+                return await self._evaluate_price_near_level_condition(
+                    condition,
+                    state,
+                    current_price
+                )
+            
+            # Handle EntryCondition types
             if condition.type == "less_than":
                 indicator_value = indicators.get(condition.indicator)
                 if indicator_value is None:
@@ -477,7 +501,7 @@ class StrategyEngine:
         except Exception as e:
             logger.error(
                 "entry_condition_evaluation_error",
-                condition_type=condition.type,
+                condition_type=getattr(condition, 'type', 'unknown'),
                 error=str(e),
                 exc_info=True
             )
