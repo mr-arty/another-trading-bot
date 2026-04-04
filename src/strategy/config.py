@@ -66,9 +66,15 @@ class StrategyConfig:
     position_direction: str = "long"  # 'long' or 'short'
     strategy_type: Optional[str] = None  # Optional: 'test' for testing mode
     
+    # Support/Resistance levels for range trading
+    support_level: Optional[float] = None
+    resistance_level: Optional[float] = None
+    level_proximity_percent: float = 0.5
+    
     def __post_init__(self):
         """Validate strategy configuration after initialization."""
         self._validate()
+        self._validate_support_resistance_levels()
     
     def _validate(self):
         """Validate strategy configuration."""
@@ -251,6 +257,62 @@ class StrategyConfig:
                     errors.append(f"Exit condition {index}: 'time_utc' must be in HH:MM format")
         
         return errors
+
+    def _validate_support_resistance_levels(self):
+        """Validate support/resistance levels if defined."""
+        # Only validate if both levels are defined
+        if self.support_level is not None and self.resistance_level is not None:
+            # Both must be positive
+            if self.support_level <= 0:
+                raise ValueError(f"support_level must be positive, got {self.support_level}")
+            if self.resistance_level <= 0:
+                raise ValueError(f"resistance_level must be positive, got {self.resistance_level}")
+
+            # Resistance must be greater than support
+            if self.resistance_level <= self.support_level:
+                raise ValueError(
+                    f"resistance_level ({self.resistance_level}) must be greater than "
+                    f"support_level ({self.support_level})"
+                )
+
+            # Calculate range width
+            range_width_percent = ((self.resistance_level - self.support_level) /
+                                   self.support_level * 100)
+
+            # Warn if range is too narrow
+            if range_width_percent < 1.0:
+                logger.warning(
+                    f"narrow_range_detected: support={self.support_level}, "
+                    f"resistance={self.resistance_level}, "
+                    f"range_width_percent={range_width_percent:.2f}. "
+                    f"Range width < 1% may result in frequent false signals"
+                )
+
+            # Warn if range is too wide
+            if range_width_percent > 20.0:
+                logger.warning(
+                    f"wide_range_detected: support={self.support_level}, "
+                    f"resistance={self.resistance_level}, "
+                    f"range_width_percent={range_width_percent:.2f}. "
+                    f"Range width > 20% may not be suitable for range trading"
+                )
+
+            # Log mid-range calculation
+            mid_range = (self.support_level + self.resistance_level) / 2
+            logger.info(
+                f"range_levels_configured: support={self.support_level}, "
+                f"resistance={self.resistance_level}, "
+                f"mid_range={mid_range}, "
+                f"range_width_percent={range_width_percent:.2f}"
+            )
+
+        # Validate proximity percent
+        if self.level_proximity_percent < 0.1 or self.level_proximity_percent > 5.0:
+            raise ValueError(
+                f"level_proximity_percent must be between 0.1 and 5.0, "
+                f"got {self.level_proximity_percent}"
+            )
+
 
 
 def load_strategy_from_yaml(file_path: Path) -> StrategyConfig:

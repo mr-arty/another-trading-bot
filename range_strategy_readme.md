@@ -1,282 +1,252 @@
-# Range Trading Strategy: Mean Reversion
+# Range Trading Strategy Guide
 
 ## Overview
 
-This strategy trades within established price ranges by:
-- Going **LONG** at dynamic support levels
-- Going **SHORT** at dynamic resistance levels
-- Exiting at **mid-range** (POC/fair value) for profit
-- Exiting via **stop-loss** when range breakout is confirmed
+The range trading strategy is designed to profit from price oscillations within a defined range. It buys at support when oversold and sells at resistance when overbought, taking profit at the mid-range.
 
----
+## Strategy Logic
 
-## Support/Resistance Calculation
+### Entry Conditions
 
-### Method: Swing Highs and Lows
+**Long Entry (Buy)**:
+- RSI (4h) < 30 (oversold)
+- Price near support level
+- Opens a long position expecting price to bounce up
 
-| Level | Calculation | Timeframe |
-|-------|-------------|-----------|
-| **Support** | Recent swing low | 1H (20 candle lookback) |
-| **Resistance** | Recent swing high | 1H (20 candle lookback) |
-| **Range** | Area between support and resistance | - |
+**Short Entry (Sell)**:
+- RSI (4h) > 70 (overbought)  
+- Price near resistance level
+- Opens a short position expecting price to drop
 
-### Swing Detection Parameters
-- **Lookback period:** 20 candles
-- **Pivot bars:** 3 bars on each side (price must be lower/higher than 3 bars on each side to qualify as swing)
-- **Zone width:** ±0.3% around the exact level (creates a "band" not just a line)
+### Exit Conditions
 
-### Range Validation
-- Minimum range width: 1.0%
-- Maximum range width: 5.0%
+**Take Profit**:
+- Exit when price reaches mid-range (exactly halfway between support and resistance)
+- For long: Sell when price rises to mid-range
+- For short: Buy back when price falls to mid-range
 
----
+**Stop Loss**:
+- 2% stop loss to protect against range breakouts
+- 24-hour time limit to avoid holding through structural changes
 
-## 200 EMA (4H) Reference Line
+## Setup Instructions
 
-The 200 EMA on the 4-hour timeframe serves two critical functions:
+### 1. Identify the Range
 
-### 1. Trend Context for Entries
-- **Price > 200 EMA:** Bullish bias, favor long entries at support
-- **Price < 200 EMA:** Bearish bias, favor short entries at resistance
-- **Price within 0.5% of EMA:** Neutral zone
+Use your charting tools to identify:
+- **Support level**: Recent swing low where price bounced multiple times
+- **Resistance level**: Recent swing high where price rejected multiple times
 
-### 2. Range Breakout Confirmation (100% Probability)
-
-This is a critical signal that confirms the range is broken:
-
+Example:
 ```
-IF ema_200_4h > resistance_level THEN
-    breakout_direction = UP
-    probability = 100%
-    action = CLOSE ALL POSITIONS
-
-IF ema_200_4h < support_level THEN
-    breakout_direction = DOWN
-    probability = 100%
-    action = CLOSE ALL POSITIONS
+Resistance: 72,000
+Mid-range:  70,000  ← (72,000 + 68,000) / 2
+Support:    68,000
 ```
 
-**Why this works:** The 200 EMA is a slow-moving average. When it crosses the range bounds, it indicates a sustained move that has shifted the macro structure, not just a temporary spike.
+### 2. Update the Strategy File
 
----
+Edit `strategies/range_trading_strategy.yaml`:
 
-## State Machine Design
+```yaml
+# Update these values based on your analysis
+support_level: 68000.0      # Your support level
+resistance_level: 72000.0   # Your resistance level
 
-The strategy uses a state machine to track the probability of a range breakout.
-
-### States
-
-| State | Probability | Description | Trigger |
-|-------|-------------|-------------|---------|
-| **NEUTRAL** | 0% | Outside S/R bands, no trade setup | Default state |
-| **BAND_ENTERED** | 20-40% | Price entered S/R zone | Price within ±0.5% of S/R |
-| **AT_LEVEL** | 40-70% | Price at or very close to S/R | Price within ±0.2% of S/R |
-| **PAST_LEVEL** | 70-90% | Price broke past S/R (suspected breakout) | Price beyond S/R by 0.2-0.5% |
-| **CONFIRMED_BREAKOUT** | 100% | Range exit confirmed | See confirmation criteria below |
-
-### State Transition Diagram
-
-```
-                    ┌─────────────────────────────────────────┐
-                    │                                         │
-                    ▼                                         │
-┌─────────┐    ┌─────────────┐    ┌──────────┐    ┌───────────┴──┐    ┌────────────────────┐
-│ NEUTRAL │───►│ BAND_ENTERED│───►│ AT_LEVEL │───►│  PAST_LEVEL  │───►│ CONFIRMED_BREAKOUT │
-└─────────┘    └─────────────┘    └──────────┘    └──────────────┘    └────────────────────┘
-                    │                   │               │                       ▲
-                    │                   │               │                       │
-                    │                   └───────────────┘                       │
-                    │                   (price bounces back)                    │
-                    │                                                           │
-                    └───────────────────────────────────────────────────────────┘
-                              (200 EMA crosses range bounds - from ANY state)
+# Update exit conditions with mid-range
+exit_conditions:
+  - type: "support_resistance"
+    price: 70000.0  # (support + resistance) / 2
 ```
 
-### Transition Rules
+### 3. Validate the Range
 
-| From | To | Condition |
-|------|----|-----------|
-| NEUTRAL | BAND_ENTERED | Price enters S/R zone (within 0.5%) |
-| BAND_ENTERED | AT_LEVEL | Price approaches exact level (within 0.2%) |
-| BAND_ENTERED | NEUTRAL | Price moves back to mid-range |
-| AT_LEVEL | BAND_ENTERED | Price bounces into band |
-| AT_LEVEL | PAST_LEVEL | Price breaks through S/R |
-| PAST_LEVEL | AT_LEVEL | Price pulls back (false breakout) |
-| PAST_LEVEL | CONFIRMED_BREAKOUT | Breakout confirmed |
-| **ANY STATE** | CONFIRMED_BREAKOUT | 200 EMA crosses range bounds |
+Good ranges have these characteristics:
+- **Clear boundaries**: Multiple touches at support/resistance
+- **Sufficient width**: At least 3-5% range width
+- **Recent formation**: Established within last few weeks
+- **Volume confirmation**: Higher volume at range extremes
 
----
+### 4. Monitor Entry Signals
 
-## Breakout Confirmation Criteria
+The bot will automatically:
+- Monitor RSI on 4-hour timeframe
+- Generate long signals when RSI < 30
+- Generate short signals when RSI > 70
 
-### Suspected Breakout (PAST_LEVEL: 70-90%)
-
-Triggered when:
-- Price beyond S/R by 0.3%
-- At least 1 candle close beyond S/R
-
-**Action:** Tighten stop-loss to 0.2%
-
-### Confirmed Breakout (100%)
-
-Triggered when ANY of the following occur:
-
-1. **Price Action Confirmation:**
-   - Price beyond S/R by >0.5%
-   - 2 consecutive candle closes beyond S/R
-
-2. **Volume Confirmation:**
-   - Price beyond S/R by >0.5%
-   - Volume >1.5x average
-
-3. **200 EMA Confirmation (Highest Priority):**
-   - 200 EMA (4H) crosses above resistance, OR
-   - 200 EMA (4H) crosses below support
-
-**Action:** Close all positions immediately, invalidate range
-
----
-
-## Entry Logic
-
-### Long Entry (at Support)
-
-All conditions must be true:
-
-| # | Condition | Description |
-|---|-----------|-------------|
-| 1 | State = AT_LEVEL | State machine indicates price at support |
-| 2 | Price within 0.2% of support | Price in the support zone |
-| 3 | RSI (15m) < 35 | Oversold confirmation |
-| 4 | 200 EMA within range | Range is intact (EMA between S/R) |
-
-### Short Entry (at Resistance)
-
-All conditions must be true:
-
-| # | Condition | Description |
-|---|-----------|-------------|
-| 1 | State = AT_LEVEL | State machine indicates price at resistance |
-| 2 | Price within 0.2% of resistance | Price in the resistance zone |
-| 3 | RSI (15m) > 65 | Overbought confirmation |
-| 4 | 200 EMA within range | Range is intact (EMA between S/R) |
-
----
-
-## Exit Logic
-
-### Take Profit
-
-- **Target:** Mid-range (Point of Control if available)
-- **Calculation:** `(Support + Resistance) / 2`
-- **POC:** If volume profile is available, use the price level with highest traded volume
-
-### Stop Loss
-
-- **Level:** 0.5% beyond the entry S/R level
-- **For long:** Support - 0.5%
-- **For short:** Resistance + 0.5%
-
-### State-Based Exits
-
-| State | Action |
-|-------|--------|
-| PAST_LEVEL | Tighten stop to 0.2% beyond S/R |
-| CONFIRMED_BREAKOUT | Close all positions immediately |
-
-### 200 EMA Breakout Exit
-
-```
-IF 200 EMA > Resistance OR 200 EMA < Support:
-    → Close all positions immediately
-    → Invalidate current range
-    → Wait for new range to form
-```
-
-### Time-Based Exit
-
-- Exit after 4 hours if neither take profit nor stop loss is hit
-
----
-
-## Volume Profile / POC
-
-### Point of Control (POC)
-
-- **Definition:** Price level with the highest traded volume over the lookback period
-- **Calculation:** Aggregate volume at each price level over 48 hours (1H candles)
-- **Usage:** Take profit target (mean reversion point)
-
-### Volume Filter for Entries
-
-- Only enter when volume < 1.2x average
-- Avoid entering during breakout attempts (high volume)
-
-### Volume Confirmation for Breakout
-
-- Breakout confirmed when volume > 1.5x average at breakout candle
-
----
+**Important**: You should manually verify that price is actually near the support/resistance levels when signals are generated.
 
 ## Risk Management
 
-| Parameter | Value | Rationale |
-|-----------|-------|-----------|
-| Position Size | 0.01 BTC (1% of capital) | Conservative for range trading |
-| Max Position | 0.03 BTC (3% of capital) | Allow scaling in |
-| Stop Loss | 0.5% beyond S/R | Confirmed breakout level |
-| Take Profit | Mid-range (POC) | Mean reversion target |
-| Risk:Reward | 1:1.5 to 1:2 | Depends on range width |
-| Max trades/day | 3 | Avoid overtrading |
-| Cooldown after loss | 2 hours | Let market settle |
-| Max daily loss | 2% | Capital preservation |
+### Position Sizing
+- **Position size**: 0.01 BTC per trade
+- **Max position**: 0.03 BTC total
+- **Risk per trade**: 2% maximum
 
----
+### Trade Limits
+- **Max trades per day**: 4
+- **Cooldown after loss**: 1 hour
+- **Min time between trades**: 2 hours
 
-## Ideal Market Conditions
+### Stop Loss Protection
+- **Stop loss**: 2% from entry
+- **Time limit**: 24 hours maximum hold time
 
-### Use This Strategy When:
-- Market is ranging/consolidating
-- Clear S/R levels with multiple touches
+## When to Use This Strategy
+
+### Good Conditions ✅
+- Sideways/consolidating market
+- Clear support and resistance levels
 - Low volatility environment
-- Price oscillates between defined levels
-- 200 EMA is flat or within the range
+- Multiple bounces at range boundaries
 
-### Avoid This Strategy When:
-- Strong trending markets
-- High volatility news events
-- S/R levels are unclear or untested
-- Price making new highs/lows
-- 200 EMA is steeply sloped
+### Bad Conditions ❌
+- Strong trending market (up or down)
+- Range breakout in progress
+- High volatility / news events
+- Unclear support/resistance levels
+
+## Monitoring and Maintenance
+
+### Daily Tasks
+1. Check if range is still valid
+2. Monitor for breakout signals
+3. Update support/resistance if range shifts
+4. Review open positions
+
+### Weekly Tasks
+1. Analyze range performance
+2. Adjust levels if market structure changes
+3. Review win rate and profit factor
+4. Consider pausing if range breaks
+
+## Example Trade Scenarios
+
+### Successful Long Trade
+```
+1. Price drops to 68,200 (near support)
+2. RSI drops to 28 (oversold)
+3. Bot enters long at 68,200
+4. Price bounces and rises
+5. Bot exits at 70,000 (mid-range)
+6. Profit: ~2.6% (1,800 / 68,200)
+```
+
+### Successful Short Trade
+```
+1. Price rises to 71,800 (near resistance)
+2. RSI rises to 72 (overbought)
+3. Bot enters short at 71,800
+4. Price rejects and falls
+5. Bot exits at 70,000 (mid-range)
+6. Profit: ~2.5% (1,800 / 71,800)
+```
+
+### Stop Loss Scenario
+```
+1. Price at 68,200, RSI at 28
+2. Bot enters long
+3. Support breaks, price drops to 66,800
+4. Stop loss triggers at 2% loss
+5. Exit at 66,836
+6. Loss: 2% (1,364 / 68,200)
+```
+
+## Current Limitations
+
+The current bot implementation has some limitations for range trading:
+
+1. **Manual level monitoring**: You need to manually verify price is near support/resistance when RSI signals trigger
+2. **Static levels**: Support/resistance levels must be manually updated in the YAML file
+3. **No dynamic range detection**: The bot doesn't automatically detect or adjust ranges
+
+### Workarounds
+
+1. **Use price alerts**: Set alerts on your exchange at support/resistance levels
+2. **Regular updates**: Update the YAML file weekly or when range shifts
+3. **Manual confirmation**: Check price action before allowing trades to execute
+4. **Test mode first**: Run in test mode to see signal frequency before live trading
+
+## Testing the Strategy
+
+### Test Mode
+Run the strategy in test mode first:
+
+```yaml
+strategy_type: "test"  # Add this line temporarily
+```
+
+This will:
+- Connect to exchange and receive data
+- Calculate RSI indicator
+- Log when conditions are met
+- NOT place any actual trades
+
+### Paper Trading
+1. Run in test mode for 1-2 weeks
+2. Manually track hypothetical trades
+3. Calculate win rate and profit factor
+4. Adjust levels and parameters as needed
+
+### Live Trading
+Only go live after:
+- ✅ Successful test mode operation
+- ✅ Positive paper trading results
+- ✅ Clear understanding of range dynamics
+- ✅ Proper risk management in place
+
+## Troubleshooting
+
+### No Signals Generated
+- Check if RSI is reaching extreme levels (< 30 or > 70)
+- Verify range is still valid
+- Ensure 4-hour candles are completing
+- Check logs for indicator calculation
+
+### Too Many Signals
+- Increase RSI thresholds (e.g., < 25 and > 75)
+- Widen the range boundaries
+- Increase min_time_between_trades
+- Add additional filters
+
+### Losses Exceeding Wins
+- Range may be breaking down
+- Support/resistance levels may need adjustment
+- Consider pausing strategy during high volatility
+- Review if market is trending instead of ranging
+
+## Advanced Optimization
+
+### Fine-Tuning RSI Levels
+- More conservative: RSI < 25 and > 75
+- More aggressive: RSI < 35 and > 65
+- Backtest to find optimal levels for your range
+
+### Dynamic Position Sizing
+- Larger positions at extreme RSI levels
+- Smaller positions at moderate RSI levels
+- Scale in/out at different price levels
+
+### Multiple Timeframe Confirmation
+- Add 1-hour RSI for additional confirmation
+- Use daily timeframe to confirm range structure
+- Require alignment across timeframes
+
+## Resources
+
+- **Strategy file**: `strategies/range_trading_strategy.yaml`
+- **Schema documentation**: `strategies/STRATEGY_SCHEMA.md`
+- **Test mode guide**: `TEST_MODE_QUICK_START.md`
+- **Main documentation**: `README.md`
+
+## Support
+
+For questions or issues:
+1. Check the logs: `logs/trading_bot.log`
+2. Review the strategy schema documentation
+3. Test in test mode before live trading
+4. Start with small position sizes
 
 ---
 
-## Decision Flow Summary
-
-```
-1. IDENTIFY RANGE
-   └── Calculate swing high (resistance) and swing low (support)
-   └── Verify 200 EMA is within range (range intact)
-
-2. WAIT FOR ENTRY
-   └── Monitor state machine for AT_LEVEL state
-   └── Check RSI confirmation (oversold at support, overbought at resistance)
-
-3. ENTER POSITION
-   └── Long at support OR Short at resistance
-   └── Set stop loss 0.5% beyond S/R
-   └── Set take profit at mid-range (POC)
-
-4. MONITOR POSITION
-   └── Track state machine for breakout probability
-   └── Watch 200 EMA position relative to range bounds
-
-5. EXIT POSITION
-   └── Take profit at mid-range, OR
-   └── Stop loss if price breaks S/R, OR
-   └── Immediate exit if 200 EMA crosses range bounds (100% confirmed)
-
-6. REPEAT
-   └── If range still valid, wait for next entry
-   └── If range broken, wait for new range to form
-```
+**Disclaimer**: This strategy is for educational purposes. Always test thoroughly and understand the risks before live trading. Past performance does not guarantee future results.

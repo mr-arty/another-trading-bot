@@ -194,3 +194,252 @@ def test_indicator_validation_invalid_type():
             position_size=0.01,
             max_position_size=0.05
         )
+
+
+def test_resistance_greater_than_support_validation():
+    """Test that resistance_level must be greater than support_level."""
+    # Valid case: resistance > support
+    config = StrategyConfig(
+        name="test_range",
+        symbol="BTCUSDT",
+        timeframes=["4h"],
+        indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+        entry_conditions=[EntryCondition(type="less_than", indicator="rsi", value=30)],
+        exit_conditions=[ExitCondition(type="take_profit", percent=2.0)],
+        position_size=0.01,
+        max_position_size=0.05,
+        support_level=68000.0,
+        resistance_level=72000.0
+    )
+    assert config.support_level == 68000.0
+    assert config.resistance_level == 72000.0
+    
+    # Invalid case: resistance <= support
+    with pytest.raises(ValueError, match="resistance_level.*must be greater than.*support_level"):
+        StrategyConfig(
+            name="test_range",
+            symbol="BTCUSDT",
+            timeframes=["4h"],
+            indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+            entry_conditions=[EntryCondition(type="less_than", indicator="rsi", value=30)],
+            exit_conditions=[ExitCondition(type="take_profit", percent=2.0)],
+            position_size=0.01,
+            max_position_size=0.05,
+            support_level=72000.0,
+            resistance_level=68000.0
+        )
+    
+    # Invalid case: resistance == support
+    with pytest.raises(ValueError, match="resistance_level.*must be greater than.*support_level"):
+        StrategyConfig(
+            name="test_range",
+            symbol="BTCUSDT",
+            timeframes=["4h"],
+            indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+            entry_conditions=[EntryCondition(type="less_than", indicator="rsi", value=30)],
+            exit_conditions=[ExitCondition(type="take_profit", percent=2.0)],
+            position_size=0.01,
+            max_position_size=0.05,
+            support_level=70000.0,
+            resistance_level=70000.0
+        )
+
+
+def test_support_resistance_must_be_positive():
+    """Test that support_level and resistance_level must be positive."""
+    # Invalid case: negative support_level
+    with pytest.raises(ValueError, match="support_level must be positive"):
+        StrategyConfig(
+            name="test_range",
+            symbol="BTCUSDT",
+            timeframes=["4h"],
+            indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+            entry_conditions=[EntryCondition(type="less_than", indicator="rsi", value=30)],
+            exit_conditions=[ExitCondition(type="take_profit", percent=2.0)],
+            position_size=0.01,
+            max_position_size=0.05,
+            support_level=-68000.0,
+            resistance_level=72000.0
+        )
+    
+    # Invalid case: negative resistance_level
+    with pytest.raises(ValueError, match="resistance_level must be positive"):
+        StrategyConfig(
+            name="test_range",
+            symbol="BTCUSDT",
+            timeframes=["4h"],
+            indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+            entry_conditions=[EntryCondition(type="less_than", indicator="rsi", value=30)],
+            exit_conditions=[ExitCondition(type="take_profit", percent=2.0)],
+            position_size=0.01,
+            max_position_size=0.05,
+            support_level=68000.0,
+            resistance_level=-72000.0
+        )
+    
+    # Invalid case: zero support_level
+    with pytest.raises(ValueError, match="support_level must be positive"):
+        StrategyConfig(
+            name="test_range",
+            symbol="BTCUSDT",
+            timeframes=["4h"],
+            indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+            entry_conditions=[EntryCondition(type="less_than", indicator="rsi", value=30)],
+            exit_conditions=[ExitCondition(type="take_profit", percent=2.0)],
+            position_size=0.01,
+            max_position_size=0.05,
+            support_level=0.0,
+            resistance_level=72000.0
+        )
+    
+    # Invalid case: zero resistance_level
+    with pytest.raises(ValueError, match="resistance_level must be positive"):
+        StrategyConfig(
+            name="test_range",
+            symbol="BTCUSDT",
+            timeframes=["4h"],
+            indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+            entry_conditions=[EntryCondition(type="less_than", indicator="rsi", value=30)],
+            exit_conditions=[ExitCondition(type="take_profit", percent=2.0)],
+            position_size=0.01,
+            max_position_size=0.05,
+            support_level=68000.0,
+            resistance_level=0.0
+        )
+
+
+def test_range_width_percentage_calculation(caplog):
+    """Test that range width percentage is calculated and logged correctly."""
+    import logging
+    caplog.set_level(logging.INFO)
+    
+    # Create config with support and resistance levels
+    config = StrategyConfig(
+        name="test_range",
+        symbol="BTCUSDT",
+        timeframes=["4h"],
+        indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+        entry_conditions=[EntryCondition(type="less_than", indicator="rsi", value=30)],
+        exit_conditions=[ExitCondition(type="take_profit", percent=2.0)],
+        position_size=0.01,
+        max_position_size=0.05,
+        support_level=68000.0,
+        resistance_level=72000.0
+    )
+    
+    # Calculate expected range width percentage
+    expected_range_width = ((72000.0 - 68000.0) / 68000.0) * 100
+    
+    # Verify the calculation is correct (approximately 5.88%)
+    assert abs(expected_range_width - 5.88) < 0.01
+    
+    # Verify that range width percentage is logged
+    log_messages = [record.message for record in caplog.records]
+    range_config_logs = [msg for msg in log_messages if "range_levels_configured" in msg]
+    
+    assert len(range_config_logs) > 0, "range_levels_configured log not found"
+    
+    # Verify the log contains the range width percentage
+    log_msg = range_config_logs[0]
+    assert "range_width_percent=5.88" in log_msg
+    assert "support=68000.0" in log_msg
+    assert "resistance=72000.0" in log_msg
+    assert "mid_range=70000.0" in log_msg
+
+
+def test_proximity_percent_validation():
+    """Test that level_proximity_percent must be between 0.1 and 5.0."""
+    # Valid case: proximity_percent = 0.5 (default)
+    config = StrategyConfig(
+        name="test_range",
+        symbol="BTCUSDT",
+        timeframes=["4h"],
+        indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+        entry_conditions=[EntryCondition(type="less_than", indicator="rsi", value=30)],
+        exit_conditions=[ExitCondition(type="take_profit", percent=2.0)],
+        position_size=0.01,
+        max_position_size=0.05,
+        support_level=68000.0,
+        resistance_level=72000.0
+    )
+    assert config.level_proximity_percent == 0.5
+    
+    # Valid case: proximity_percent = 0.1 (minimum)
+    config = StrategyConfig(
+        name="test_range",
+        symbol="BTCUSDT",
+        timeframes=["4h"],
+        indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+        entry_conditions=[EntryCondition(type="less_than", indicator="rsi", value=30)],
+        exit_conditions=[ExitCondition(type="take_profit", percent=2.0)],
+        position_size=0.01,
+        max_position_size=0.05,
+        support_level=68000.0,
+        resistance_level=72000.0,
+        level_proximity_percent=0.1
+    )
+    assert config.level_proximity_percent == 0.1
+    
+    # Valid case: proximity_percent = 5.0 (maximum)
+    config = StrategyConfig(
+        name="test_range",
+        symbol="BTCUSDT",
+        timeframes=["4h"],
+        indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+        entry_conditions=[EntryCondition(type="less_than", indicator="rsi", value=30)],
+        exit_conditions=[ExitCondition(type="take_profit", percent=2.0)],
+        position_size=0.01,
+        max_position_size=0.05,
+        support_level=68000.0,
+        resistance_level=72000.0,
+        level_proximity_percent=5.0
+    )
+    assert config.level_proximity_percent == 5.0
+    
+    # Invalid case: proximity_percent < 0.1
+    with pytest.raises(ValueError, match="level_proximity_percent must be between 0.1 and 5.0"):
+        StrategyConfig(
+            name="test_range",
+            symbol="BTCUSDT",
+            timeframes=["4h"],
+            indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+            entry_conditions=[EntryCondition(type="less_than", indicator="rsi", value=30)],
+            exit_conditions=[ExitCondition(type="take_profit", percent=2.0)],
+            position_size=0.01,
+            max_position_size=0.05,
+            support_level=68000.0,
+            resistance_level=72000.0,
+            level_proximity_percent=0.05
+        )
+    
+    # Invalid case: proximity_percent > 5.0
+    with pytest.raises(ValueError, match="level_proximity_percent must be between 0.1 and 5.0"):
+        StrategyConfig(
+            name="test_range",
+            symbol="BTCUSDT",
+            timeframes=["4h"],
+            indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+            entry_conditions=[EntryCondition(type="less_than", indicator="rsi", value=30)],
+            exit_conditions=[ExitCondition(type="take_profit", percent=2.0)],
+            position_size=0.01,
+            max_position_size=0.05,
+            support_level=68000.0,
+            resistance_level=72000.0,
+            level_proximity_percent=5.5
+        )
+    
+    # Invalid case: proximity_percent = 0
+    with pytest.raises(ValueError, match="level_proximity_percent must be between 0.1 and 5.0"):
+        StrategyConfig(
+            name="test_range",
+            symbol="BTCUSDT",
+            timeframes=["4h"],
+            indicators={"rsi": IndicatorConfig(type="rsi", timeframe="4h", period=14)},
+            entry_conditions=[EntryCondition(type="less_than", indicator="rsi", value=30)],
+            exit_conditions=[ExitCondition(type="take_profit", percent=2.0)],
+            position_size=0.01,
+            max_position_size=0.05,
+            support_level=68000.0,
+            resistance_level=72000.0,
+            level_proximity_percent=0.0
+        )
