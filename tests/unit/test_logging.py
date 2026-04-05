@@ -5,7 +5,7 @@ import tempfile
 import shutil
 from pathlib import Path
 import pytest
-from src.logging import (
+from src.bot_logging import (
     setup_logging,
     get_logger,
     log_order,

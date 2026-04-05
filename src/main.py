@@ -6,6 +6,10 @@ import os
 import sys
 from pathlib import Path
 
+# Add project root to Python path
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
+
 from src.database.db import Database
 from src.config.config import load_config
 from src.strategy.loader import StrategyLoader
@@ -20,7 +24,7 @@ from src.monitoring.volatility import VolatilityMonitor
 from src.killswitch.handler import KillSwitchHandler
 
 # Import logging functions after other imports to avoid conflicts
-import src.logging.logger as bot_logger
+import src.bot_logging.logger as bot_logger
 
 
 async def main():

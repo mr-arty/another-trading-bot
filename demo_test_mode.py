@@ -22,7 +22,7 @@ from src.strategy import StrategyLoader, StrategyEngine
 from src.market_data import MarketDataManager
 from src.exchange import ExchangeConnector
 from src.indicators import IndicatorCalculator
-from src.logging import setup_logging, get_logger
+from src.bot_logging import setup_logging, get_logger
 
 
 async def main():

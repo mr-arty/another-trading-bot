@@ -8,7 +8,7 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from src.logging import (
+from src.bot_logging import (
     setup_logging,
     get_logger,
     log_order,
