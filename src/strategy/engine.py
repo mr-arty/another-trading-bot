@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Callable, Awaitable, Any
 import structlog
 
-from src.strategy.config import StrategyConfig, EntryCondition, ExitCondition, PriceNearLevelCondition
+from src.strategy.config import StrategyConfig, EntryCondition, ExitCondition, PriceNearLevelCondition, PriceNearVwapBandCondition, VwapCrossCondition
 from src.exchange.connector import MarketData
 from src.indicators.calculator import IndicatorCalculator
 
@@ -314,6 +314,25 @@ class StrategyEngine:
                         timeframe=indicator_config.timeframe,
                         period=indicator_config.period
                     )
+                elif indicator_config.type == "vwap":
+                    value = await self.indicator_calculator.calculate_vwap(
+                        symbol=symbol,
+                        timeframe=indicator_config.timeframe
+                    )
+                elif indicator_config.type == "vwap_upper_band":
+                    value = await self.indicator_calculator.calculate_vwap_band(
+                        symbol=symbol,
+                        timeframe=indicator_config.timeframe,
+                        std_dev_multiplier=indicator_config.std_dev_multiplier,
+                        band_type="upper"
+                    )
+                elif indicator_config.type == "vwap_lower_band":
+                    value = await self.indicator_calculator.calculate_vwap_band(
+                        symbol=symbol,
+                        timeframe=indicator_config.timeframe,
+                        std_dev_multiplier=indicator_config.std_dev_multiplier,
+                        band_type="lower"
+                    )
                 else:
                     logger.warning(
                         "unknown_indicator_type",
@@ -442,6 +461,15 @@ class StrategyEngine:
                     condition,
                     state,
                     current_price
+                )
+            
+            # Handle PriceNearVwapBandCondition
+            if isinstance(condition, PriceNearVwapBandCondition):
+                return await self._evaluate_price_near_vwap_band_condition(
+                    condition,
+                    state,
+                    current_price,
+                    indicators
                 )
             
             # Handle EntryCondition types
@@ -614,6 +642,165 @@ class StrategyEngine:
         
         return is_near, reason
     
+    async def _evaluate_price_near_vwap_band_condition(
+        self,
+        condition: PriceNearVwapBandCondition,
+        state: StrategyState,
+        current_price: float,
+        indicators: Dict[str, float]
+    ) -> tuple[bool, str]:
+        """
+        Evaluate if price is near a VWAP band.
+        
+        Args:
+            condition: VWAP band proximity condition
+            state: Strategy state
+            current_price: Current market price
+            indicators: Current indicator values
+            
+        Returns:
+            Tuple of (condition_met, reason_string)
+        """
+        config = state.config
+        
+        # Find the VWAP band indicator
+        band_indicator_name = None
+        for name, ind_config in config.indicators.items():
+            if ind_config.type == f"vwap_{condition.band_type}_band":
+                if ind_config.std_dev_multiplier == condition.std_dev_multiplier:
+                    band_indicator_name = name
+                    break
+        
+        if band_indicator_name is None:
+            logger.error(
+                "missing_vwap_band_indicator",
+                strategy=config.name,
+                band_type=condition.band_type,
+                std_dev_multiplier=condition.std_dev_multiplier,
+                message="No matching VWAP band indicator found in strategy config"
+            )
+            return False, "VWAP band indicator not defined"
+        
+        # Get band price from indicators
+        band_price = indicators.get(band_indicator_name)
+        if band_price is None:
+            return False, "VWAP band value not available"
+        
+        # Calculate distance as percentage
+        distance_percent = abs(current_price - band_price) / band_price * 100
+        
+        # Check if within proximity threshold
+        proximity_threshold = condition.proximity_percent
+        is_near = distance_percent <= proximity_threshold
+        
+        # Track proximity zone transitions for logging
+        pair_key = (config.name, config.symbol)
+        if pair_key not in self._pair_states:
+            self._pair_states[pair_key] = {}
+        
+        # Check if this is a zone entry/exit
+        band_name = f"{condition.band_type}_{condition.std_dev_multiplier}std"
+        was_near_key = f"was_near_vwap_{band_name}"
+        was_near = self._pair_states[pair_key].get(was_near_key, False)
+        
+        if is_near and not was_near:
+            # Entering proximity zone
+            logger.info(
+                "entering_vwap_band_proximity",
+                strategy=config.name,
+                symbol=config.symbol,
+                band_type=condition.band_type,
+                std_dev_multiplier=condition.std_dev_multiplier,
+                band_price=band_price,
+                current_price=current_price,
+                distance_percent=round(distance_percent, 3),
+                threshold_percent=proximity_threshold
+            )
+            self._pair_states[pair_key][was_near_key] = True
+        elif not is_near and was_near:
+            # Exiting proximity zone
+            logger.info(
+                "exiting_vwap_band_proximity",
+                strategy=config.name,
+                symbol=config.symbol,
+                band_type=condition.band_type,
+                std_dev_multiplier=condition.std_dev_multiplier,
+                band_price=band_price,
+                current_price=current_price,
+                distance_percent=round(distance_percent, 3),
+                threshold_percent=proximity_threshold
+            )
+            self._pair_states[pair_key][was_near_key] = False
+        
+        # Build reason string
+        if is_near:
+            reason = (
+                f"Price {current_price:.2f} within {distance_percent:.2f}% "
+                f"of VWAP {condition.band_type} band ({condition.std_dev_multiplier}σ) "
+                f"at {band_price:.2f}"
+            )
+        else:
+            reason = (
+                f"Price {current_price:.2f} is {distance_percent:.2f}% "
+                f"from VWAP {condition.band_type} band ({condition.std_dev_multiplier}σ) "
+                f"at {band_price:.2f} (threshold: {proximity_threshold}%)"
+            )
+        
+        logger.debug(
+            "price_near_vwap_band_evaluated",
+            strategy=config.name,
+            band_type=condition.band_type,
+            std_dev_multiplier=condition.std_dev_multiplier,
+            is_near=is_near,
+            distance_percent=round(distance_percent, 3),
+            reason=reason
+        )
+        
+        return is_near, reason
+    
+    async def _evaluate_vwap_cross_condition(
+        self,
+        condition: VwapCrossCondition,
+        state: StrategyState,
+        current_price: float,
+        indicators: Dict[str, float]
+    ) -> tuple[bool, str]:
+        """
+        Evaluate if price has crossed VWAP line.
+        
+        Args:
+            condition: VWAP cross condition
+            state: Strategy state
+            current_price: Current market price
+            indicators: Current indicator values
+            
+        Returns:
+            Tuple of (condition_met, reason_string)
+        """
+        config = state.config
+        
+        # Get VWAP value from indicators
+        vwap_value = indicators.get(condition.vwap_indicator)
+        if vwap_value is None:
+            return False, "VWAP value not available"
+        
+        # For cross detection, we need previous price
+        # Use entry price as reference
+        if state.entry_price is None:
+            return False, "No entry price available for cross detection"
+        
+        # Check if price crossed VWAP
+        if condition.direction == "above":
+            # Exit when price crosses above VWAP (for long positions)
+            met = current_price > vwap_value and state.entry_price <= vwap_value
+            reason = f"Price {current_price:.2f} crossed above VWAP {vwap_value:.2f}"
+        else:  # "below"
+            # Exit when price crosses below VWAP (for short positions)
+            met = current_price < vwap_value and state.entry_price >= vwap_value
+            reason = f"Price {current_price:.2f} crossed below VWAP {vwap_value:.2f}"
+        
+        return met, reason
+    
     async def _evaluate_exit_conditions(
         self,
         state: StrategyState,
@@ -638,7 +825,8 @@ class StrategyEngine:
             met, reason = await self._evaluate_exit_condition(
                 condition,
                 state,
-                data
+                data,
+                indicators
             )
             
             if met:
@@ -671,9 +859,10 @@ class StrategyEngine:
     
     async def _evaluate_exit_condition(
         self,
-        condition: ExitCondition,
+        condition,
         state: StrategyState,
-        data: MarketData
+        data: MarketData,
+        indicators: Dict[str, float]
     ) -> tuple[bool, str]:
         """
         Evaluate a single exit condition.
@@ -687,6 +876,15 @@ class StrategyEngine:
             Tuple of (condition_met, reason_string)
         """
         try:
+            # Handle VwapCrossCondition
+            if isinstance(condition, VwapCrossCondition):
+                return await self._evaluate_vwap_cross_condition(
+                    condition,
+                    state,
+                    data.close,
+                    indicators
+                )
+            
             if condition.type == "take_profit":
                 if state.entry_price is None:
                     return False, ""

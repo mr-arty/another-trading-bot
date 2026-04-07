@@ -1,4 +1,29 @@
-"""Technical indicator calculations with caching."""
+"""Technical indicator calculations with caching.
+
+This module provides technical indicator calculations including:
+- RSI (Relative Strength Index)
+- EMA (Exponential Moving Average)
+- VWAP (Volume-Weighted Average Price)
+- VWAP Standard Deviation Bands
+
+VWAP Calculation:
+    VWAP = sum(typical_price × volume) / sum(volume)
+    where typical_price = (high + low) / 2
+
+VWAP Standard Deviation:
+    variance = (sum(volume × hl2²) / sum(volume)) - VWAP²
+    std_dev = sqrt(max(variance, 0))
+
+VWAP Bands:
+    upper_band = VWAP + (multiplier × std_dev)
+    lower_band = VWAP - (multiplier × std_dev)
+
+Session Management:
+    VWAP calculations reset daily at 00:00 UTC to start a new trading session.
+    Cumulative sums (vwapsum, volumesum, v2sum) are reset at session boundaries.
+
+All indicator values are cached for performance optimization.
+"""
 
 import asyncio
 from collections import deque
@@ -22,6 +47,16 @@ class IndicatorValue:
     symbol: str
     indicator_type: str
     timeframe: str
+
+
+@dataclass
+class VwapState:
+    """State for VWAP calculation per symbol/timeframe."""
+    vwapsum: float = 0.0  # Cumulative sum of (hl2 * volume)
+    volumesum: float = 0.0  # Cumulative sum of volume
+    v2sum: float = 0.0  # Cumulative sum of (volume * hl2 * hl2)
+    session_start: Optional[datetime] = None
+    last_reset: Optional[datetime] = None
 
 
 class IndicatorCalculator:
@@ -58,6 +93,9 @@ class IndicatorCalculator:
         # Historical data storage for calculations
         # {(symbol, timeframe): deque of MarketData}
         self._historical_data: Dict[Tuple[str, str], Deque[MarketData]] = {}
+        
+        # VWAP state tracking: {(symbol, timeframe): VwapState}
+        self._vwap_states: Dict[Tuple[str, str], VwapState] = {}
         
         # Lock for thread-safe operations
         self._lock = asyncio.Lock()
@@ -263,6 +301,317 @@ class IndicatorCalculator:
             )
             
             return ema_value
+    
+    async def calculate_vwap(
+        self,
+        symbol: str,
+        timeframe: str,
+        use_cache: bool = True
+    ) -> Optional[float]:
+        """
+        Calculate Volume-Weighted Average Price (VWAP).
+        
+        Formula:
+            VWAP = sum(typical_price * volume) / sum(volume)
+            where typical_price = (high + low) / 2
+        
+        The VWAP resets daily at 00:00 UTC to start a new trading session.
+        
+        Args:
+            symbol: Trading symbol
+            timeframe: Timeframe (5m, 15m, 30m, 1h, 4h, 1d)
+            use_cache: Use cached value if available
+            
+        Returns:
+            VWAP value or None if insufficient data
+        """
+        # Check cache first (use period=0 for VWAP since it doesn't use period)
+        if use_cache:
+            cached = await self._get_cached_value(symbol, "vwap", timeframe, 0)
+            if cached is not None:
+                return cached
+        
+        async with self._lock:
+            # Get historical data
+            key = (symbol, timeframe)
+            if key not in self._historical_data:
+                logger.warning(
+                    "no_historical_data",
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    indicator="vwap"
+                )
+                return None
+            
+            data_points = list(self._historical_data[key])
+            
+            # Need at least 1 data point
+            if len(data_points) < 1:
+                logger.debug(
+                    "insufficient_data_for_vwap",
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    required=1,
+                    available=len(data_points)
+                )
+                return None
+            
+            # Get or create VWAP state
+            state_key = (symbol, timeframe)
+            if state_key not in self._vwap_states:
+                self._vwap_states[state_key] = VwapState(
+                    session_start=data_points[0].timestamp
+                )
+            
+            state = self._vwap_states[state_key]
+            
+            # Get latest data point
+            latest_data = data_points[-1]
+            
+            # Check if we need to reset for new session (daily at 00:00 UTC)
+            if state.last_reset is None:
+                state.last_reset = latest_data.timestamp
+            
+            # Reset if new day - recalculate from scratch for the new session
+            if latest_data.timestamp.date() != state.last_reset.date():
+                state.vwapsum = 0.0
+                state.volumesum = 0.0
+                state.v2sum = 0.0
+                state.session_start = latest_data.timestamp
+                state.last_reset = latest_data.timestamp
+                logger.info(
+                    "vwap_session_reset",
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    timestamp=latest_data.timestamp.isoformat()
+                )
+                
+                # Recalculate from all data points in the new session
+                for data in data_points:
+                    if data.timestamp.date() == latest_data.timestamp.date():
+                        hl2 = (data.high + data.low) / 2
+                        volume = data.volume
+                        state.vwapsum += hl2 * volume
+                        state.volumesum += volume
+                        state.v2sum += volume * hl2 * hl2
+            else:
+                # Same session - recalculate from all data points in current session
+                # Reset cumulative sums
+                state.vwapsum = 0.0
+                state.volumesum = 0.0
+                state.v2sum = 0.0
+                
+                # Calculate from all data points in the current session
+                for data in data_points:
+                    if data.timestamp.date() == state.last_reset.date():
+                        hl2 = (data.high + data.low) / 2
+                        volume = data.volume
+                        state.vwapsum += hl2 * volume
+                        state.volumesum += volume
+                        state.v2sum += volume * hl2 * hl2
+            
+            # Calculate VWAP
+            if state.volumesum == 0:
+                logger.debug(
+                    "zero_volume_for_vwap",
+                    symbol=symbol,
+                    timeframe=timeframe
+                )
+                return None
+            
+            vwap = state.vwapsum / state.volumesum
+            
+            # Cache the result (use period=0 for VWAP)
+            await self._cache_value(
+                symbol=symbol,
+                indicator_type="vwap",
+                timeframe=timeframe,
+                period=0,
+                value=vwap
+            )
+            
+            logger.debug(
+                "vwap_calculated",
+                symbol=symbol,
+                timeframe=timeframe,
+                vwap=vwap,
+                volumesum=state.volumesum
+            )
+            
+            return vwap
+    
+    async def calculate_vwap_std_dev(
+        self,
+        symbol: str,
+        timeframe: str,
+        use_cache: bool = True
+    ) -> Optional[float]:
+        """
+        Calculate VWAP standard deviation.
+        
+        Formula:
+            variance = (sum(volume * hl2^2) / sum(volume)) - VWAP^2
+            std_dev = sqrt(max(variance, 0))
+        
+        Args:
+            symbol: Trading symbol
+            timeframe: Timeframe (5m, 15m, 30m, 1h, 4h, 1d)
+            use_cache: Use cached value if available
+            
+        Returns:
+            Standard deviation value or None if insufficient data
+        """
+        # Check cache first (use period=0 for VWAP std dev since it doesn't use period)
+        if use_cache:
+            cached = await self._get_cached_value(symbol, "vwap_std_dev", timeframe, 0)
+            if cached is not None:
+                return cached
+        
+        # Get VWAP state
+        state_key = (symbol, timeframe)
+        if state_key not in self._vwap_states:
+            logger.debug(
+                "no_vwap_state",
+                symbol=symbol,
+                timeframe=timeframe,
+                indicator="vwap_std_dev"
+            )
+            return None
+        
+        state = self._vwap_states[state_key]
+        
+        if state.volumesum == 0:
+            logger.debug(
+                "zero_volume_for_vwap_std_dev",
+                symbol=symbol,
+                timeframe=timeframe
+            )
+            return None
+        
+        # Calculate VWAP first
+        vwap = await self.calculate_vwap(symbol, timeframe, use_cache=use_cache)
+        if vwap is None:
+            return None
+        
+        # Calculate variance
+        variance = (state.v2sum / state.volumesum) - (vwap * vwap)
+        
+        # Handle floating point precision issues - clamp negative variance to 0
+        variance = max(variance, 0.0)
+        
+        # Calculate standard deviation
+        std_dev = variance ** 0.5
+        
+        # Cache the result (use period=0 for VWAP std dev)
+        await self._cache_value(
+            symbol=symbol,
+            indicator_type="vwap_std_dev",
+            timeframe=timeframe,
+            period=0,
+            value=std_dev
+        )
+        
+        logger.debug(
+            "vwap_std_dev_calculated",
+            symbol=symbol,
+            timeframe=timeframe,
+            std_dev=std_dev,
+            variance=variance
+        )
+        
+        return std_dev
+    
+    async def calculate_vwap_band(
+        self,
+        symbol: str,
+        timeframe: str,
+        std_dev_multiplier: float,
+        band_type: str,
+        use_cache: bool = True
+    ) -> Optional[float]:
+        """
+        Calculate VWAP band at specified standard deviation level.
+        
+        Formula:
+            upper_band = VWAP + (multiplier * std_dev)
+            lower_band = VWAP - (multiplier * std_dev)
+        
+        Args:
+            symbol: Trading symbol
+            timeframe: Timeframe (5m, 15m, 30m, 1h, 4h, 1d)
+            std_dev_multiplier: Standard deviation multiplier (e.g., 2.0, 3.0)
+            band_type: "upper" or "lower"
+            use_cache: Use cached value if available
+            
+        Returns:
+            Band value or None if insufficient data
+            
+        Raises:
+            ValueError: If band_type is not "upper" or "lower"
+        """
+        # Validate band_type
+        if band_type not in ["upper", "lower"]:
+            raise ValueError(f"Invalid band_type: {band_type}. Must be 'upper' or 'lower'")
+        
+        # Check cache first
+        cache_key = f"vwap_band_{band_type}_{std_dev_multiplier}_{symbol}_{timeframe}"
+        if use_cache:
+            # Use period=0 for VWAP bands since they don't use period
+            cached = await self._get_cached_value(symbol, cache_key, timeframe, 0)
+            if cached is not None:
+                return cached
+        
+        # Calculate VWAP
+        vwap = await self.calculate_vwap(symbol, timeframe, use_cache=use_cache)
+        if vwap is None:
+            logger.debug(
+                "vwap_not_available_for_band",
+                symbol=symbol,
+                timeframe=timeframe,
+                band_type=band_type,
+                std_dev_multiplier=std_dev_multiplier
+            )
+            return None
+        
+        # Calculate standard deviation
+        std_dev = await self.calculate_vwap_std_dev(symbol, timeframe, use_cache=use_cache)
+        if std_dev is None:
+            logger.debug(
+                "vwap_std_dev_not_available_for_band",
+                symbol=symbol,
+                timeframe=timeframe,
+                band_type=band_type,
+                std_dev_multiplier=std_dev_multiplier
+            )
+            return None
+        
+        # Calculate band
+        if band_type == "upper":
+            band = vwap + (std_dev_multiplier * std_dev)
+        else:  # band_type == "lower"
+            band = vwap - (std_dev_multiplier * std_dev)
+        
+        # Cache the result (use period=0 for VWAP bands)
+        await self._cache_value(
+            symbol=symbol,
+            indicator_type=cache_key,
+            timeframe=timeframe,
+            period=0,
+            value=band
+        )
+        
+        logger.debug(
+            "vwap_band_calculated",
+            symbol=symbol,
+            timeframe=timeframe,
+            band_type=band_type,
+            std_dev_multiplier=std_dev_multiplier,
+            vwap=vwap,
+            std_dev=std_dev,
+            band=band
+        )
+        
+        return band
     
     async def _get_cached_value(
         self,

@@ -214,6 +214,100 @@ poc:
   description: "Point of Control from volume profile"
 ```
 
+#### VWAP (Volume-Weighted Average Price)
+
+VWAP is a volume-weighted average price that resets daily at 00:00 UTC. It provides a dynamic reference price that accounts for both price and volume.
+
+**Formula**:
+```
+VWAP = sum(typical_price × volume) / sum(volume)
+where typical_price = (high + low) / 2
+```
+
+**Basic VWAP Indicator**:
+```yaml
+vwap_1h:
+  type: "vwap"
+  timeframe: "1h"
+  description: "VWAP on 1-hour timeframe"
+```
+
+**Parameters**:
+- `type`: Must be "vwap"
+- `timeframe`: Timeframe for calculation (e.g., "1h", "4h")
+- `period`: Not used for VWAP (can be omitted or set to 0)
+
+**Session Management**:
+- VWAP resets daily at 00:00 UTC
+- Cumulative sums restart each trading session
+- Bot logs `vwap_session_reset` event on reset
+
+#### VWAP Standard Deviation Bands
+
+VWAP bands are calculated using standard deviation multipliers, creating dynamic support and resistance zones around the VWAP line.
+
+**Formula**:
+```
+variance = (sum(volume × hl2²) / sum(volume)) - VWAP²
+std_dev = sqrt(max(variance, 0))
+upper_band = VWAP + (multiplier × std_dev)
+lower_band = VWAP - (multiplier × std_dev)
+```
+
+**Upper Band Indicators**:
+```yaml
+vwap_upper_2std:
+  type: "vwap_upper_band"
+  timeframe: "1h"
+  std_dev_multiplier: 2.0
+  description: "VWAP upper band at +2 std dev"
+
+vwap_upper_3std:
+  type: "vwap_upper_band"
+  timeframe: "1h"
+  std_dev_multiplier: 3.0
+  description: "VWAP upper band at +3 std dev"
+
+vwap_upper_4std:
+  type: "vwap_upper_band"
+  timeframe: "1h"
+  std_dev_multiplier: 4.0
+  description: "VWAP upper band at +4 std dev (stop loss)"
+```
+
+**Lower Band Indicators**:
+```yaml
+vwap_lower_2std:
+  type: "vwap_lower_band"
+  timeframe: "1h"
+  std_dev_multiplier: 2.0
+  description: "VWAP lower band at -2 std dev"
+
+vwap_lower_3std:
+  type: "vwap_lower_band"
+  timeframe: "1h"
+  std_dev_multiplier: 3.0
+  description: "VWAP lower band at -3 std dev"
+
+vwap_lower_4std:
+  type: "vwap_lower_band"
+  timeframe: "1h"
+  std_dev_multiplier: 4.0
+  description: "VWAP lower band at -4 std dev (stop loss)"
+```
+
+**Parameters**:
+- `type`: "vwap_upper_band" or "vwap_lower_band"
+- `timeframe`: Timeframe for calculation (must match VWAP timeframe)
+- `std_dev_multiplier`: Standard deviation level (e.g., 1.0, 2.0, 3.0, 4.0)
+- `period`: Not used for VWAP bands (can be omitted or set to 0)
+
+**Common Multiplier Levels**:
+- **±1.0σ**: Inner bands, minor support/resistance
+- **±2.0σ**: Standard bands, typical entry zones
+- **±3.0σ**: Extreme bands, high-probability entry zones
+- **±4.0σ**: Very extreme bands, stop-loss zones
+
 ## Entry Conditions Section
 
 Entry conditions define when to enter a trade. All conditions must be true unless using `entry_conditions_long` and `entry_conditions_short` for separate long/short logic.
@@ -379,6 +473,82 @@ entry_conditions:
 - Bot logs when price exits proximity zone: `exiting_level_proximity`
 - Logs include: level name, level price, current price, distance percentage
 
+#### VWAP Band Proximity Conditions
+
+**`price_near_vwap_band`** - Price within proximity threshold of a VWAP standard deviation band
+
+This condition checks if the current price is within a specified percentage distance from a VWAP band. Used for VWAP-based range trading strategies where entries occur at extreme bands.
+
+```yaml
+- type: "price_near_vwap_band"
+  band_type: "lower"  # or "upper"
+  std_dev_multiplier: 2.0
+  proximity_percent: 0.5
+  description: "Price within 0.5% of VWAP -2σ band"
+```
+
+**Parameters**:
+- `band_type` (required): Either "upper" or "lower"
+- `std_dev_multiplier` (required): Standard deviation level (e.g., 2.0, 3.0, 4.0)
+- `proximity_percent` (optional): Distance threshold percentage (default: 0.5%)
+- `description` (optional): Human-readable description
+
+**Requirements**:
+- Strategy must define matching VWAP band indicator
+- Band indicator must have same `std_dev_multiplier` value
+- `proximity_percent` must be between 0.1% and 5.0%
+
+**Calculation**:
+```
+distance_percent = abs(current_price - band_price) / band_price × 100
+condition_met = distance_percent <= proximity_percent
+```
+
+**Example - Long Entry at Lower Band**:
+```yaml
+indicators:
+  vwap_1h:
+    type: "vwap"
+    timeframe: "1h"
+  
+  vwap_lower_2std:
+    type: "vwap_lower_band"
+    timeframe: "1h"
+    std_dev_multiplier: 2.0
+
+entry_conditions:
+  - type: "price_near_vwap_band"
+    band_type: "lower"
+    std_dev_multiplier: 2.0
+    proximity_percent: 0.5
+    description: "Price within 0.5% of VWAP -2σ band"
+```
+
+**Example - Short Entry at Upper Band**:
+```yaml
+indicators:
+  vwap_1h:
+    type: "vwap"
+    timeframe: "1h"
+  
+  vwap_upper_3std:
+    type: "vwap_upper_band"
+    timeframe: "1h"
+    std_dev_multiplier: 3.0
+
+entry_conditions:
+  - type: "price_near_vwap_band"
+    band_type: "upper"
+    std_dev_multiplier: 3.0
+    proximity_percent: 0.5
+    description: "Price within 0.5% of VWAP +3σ band"
+```
+
+**Logging**:
+- Bot logs when price enters band proximity: `entering_vwap_band_proximity`
+- Bot logs when price exits band proximity: `exiting_vwap_band_proximity`
+- Logs include: band type, std dev multiplier, band price, current price, distance percentage
+
 ## Exit Conditions Section
 
 Exit conditions define when to close a position. ANY condition can trigger an exit.
@@ -468,6 +638,63 @@ exit_conditions:
   use_poc_if_available: true
   indicator: "poc"
 ```
+
+#### VWAP Cross Exits
+
+**`vwap_cross`** - Exit when price crosses VWAP line
+
+This condition triggers when price crosses the VWAP line in the specified direction. Used for VWAP-based range trading strategies where exits occur when price returns to VWAP from extreme bands.
+
+```yaml
+- type: "vwap_cross"
+  direction: "above"  # or "below"
+  vwap_indicator: "vwap_1h"
+  description: "Exit when price crosses above VWAP"
+```
+
+**Parameters**:
+- `direction` (required): "above" or "below" - direction of the cross
+- `vwap_indicator` (required): Name of VWAP indicator to reference
+- `description` (optional): Human-readable description
+
+**Requirements**:
+- Strategy must define the referenced VWAP indicator
+- Referenced indicator must be type "vwap"
+
+**Cross Detection**:
+- Compares current price to VWAP value
+- Compares entry price to VWAP value
+- Cross detected when price moves from one side of VWAP to the other
+
+**Example - Long Position Exit**:
+```yaml
+indicators:
+  vwap_1h:
+    type: "vwap"
+    timeframe: "1h"
+
+exit_conditions:
+  - type: "vwap_cross"
+    direction: "above"
+    vwap_indicator: "vwap_1h"
+    description: "Exit long when price crosses above VWAP"
+```
+
+**Example - Short Position Exit**:
+```yaml
+indicators:
+  vwap_1h:
+    type: "vwap"
+    timeframe: "1h"
+
+exit_conditions:
+  - type: "vwap_cross"
+    direction: "below"
+    vwap_indicator: "vwap_1h"
+    description: "Exit short when price crosses below VWAP"
+```
+
+**Note**: VWAP band proximity conditions can also be used as exit conditions for stop-loss at extreme bands (e.g., ±4σ).
 
 ## Position Sizing and Risk Management
 
@@ -870,6 +1097,131 @@ metadata:
     3. Optionally adjust level_proximity_percent (default: 0.5%)
     4. Calculate mid-range: (support + resistance) / 2
     5. Update the exit condition prices to the mid-range value
+```
+
+## Complete Example: VWAP Range Trading Strategy
+
+```yaml
+name: "vwap_range_trading"
+symbol: "BTCUSDT"
+strategy_type: "range_trading"
+position_direction: "long"  # Long position: buy on entry, sell on exit
+
+timeframes:
+  - "1h"
+
+# =============================================================================
+# VWAP INDICATORS
+# =============================================================================
+indicators:
+  # VWAP line
+  vwap_1h:
+    type: "vwap"
+    timeframe: "1h"
+    description: "VWAP on 1-hour timeframe (resets daily at 00:00 UTC)"
+  
+  # Entry bands (±2σ and ±3σ)
+  vwap_lower_2std:
+    type: "vwap_lower_band"
+    timeframe: "1h"
+    std_dev_multiplier: 2.0
+    description: "VWAP lower band at -2 std dev"
+  
+  vwap_lower_3std:
+    type: "vwap_lower_band"
+    timeframe: "1h"
+    std_dev_multiplier: 3.0
+    description: "VWAP lower band at -3 std dev (extreme entry)"
+  
+  # Stop loss band (±4σ)
+  vwap_lower_4std:
+    type: "vwap_lower_band"
+    timeframe: "1h"
+    std_dev_multiplier: 4.0
+    description: "VWAP lower band at -4 std dev (stop loss)"
+
+# =============================================================================
+# ENTRY CONDITIONS
+# =============================================================================
+# Enter LONG when price is near the -2σ or -3σ lower band
+# The bot automatically detects when price enters the proximity zone
+entry_conditions:
+  - type: "price_near_vwap_band"
+    band_type: "lower"
+    std_dev_multiplier: 2.0
+    proximity_percent: 0.5
+    description: "Price within 0.5% of VWAP -2σ band"
+
+# =============================================================================
+# EXIT CONDITIONS
+# =============================================================================
+# Exit when:
+# 1. Price crosses back above VWAP (take profit)
+# 2. Price reaches -4σ band (stop loss)
+# 3. Time exceeds 24 hours (time-based exit)
+exit_conditions:
+  - type: "vwap_cross"
+    direction: "above"
+    vwap_indicator: "vwap_1h"
+    description: "Exit long when price crosses above VWAP (take profit)"
+  
+  - type: "price_near_vwap_band"
+    band_type: "lower"
+    std_dev_multiplier: 4.0
+    proximity_percent: 0.5
+    description: "Stop loss at -4σ band"
+  
+  - type: "time_exceeds"
+    seconds: 86400  # 24 hours
+    description: "Exit after 24 hours if VWAP not reached"
+
+# =============================================================================
+# POSITION SIZING AND RISK MANAGEMENT
+# =============================================================================
+position_size: 0.001  # 0.001 BTC per trade
+max_position_size: 0.003  # Maximum 0.003 BTC total
+
+risk_parameters:
+  max_trades_per_day: 4
+  cooldown_after_loss: 3600  # 1 hour cooldown after loss
+  max_daily_loss_percent: 3.0
+  max_risk_per_trade_percent: 2.0
+  min_time_between_trades: 3600  # 1 hour between trades
+
+# =============================================================================
+# METADATA
+# =============================================================================
+metadata:
+  version: "1.0.0"
+  description: |
+    VWAP Range Trading Strategy for BTC/USDT (Long Positions)
+    
+    Strategy Logic:
+    - Uses VWAP standard deviation bands for dynamic support/resistance
+    - Enters long when price reaches -2σ band (oversold)
+    - Exits when price crosses back above VWAP (mean reversion)
+    - Stop loss at -4σ band (extreme deviation)
+    
+    VWAP Calculation:
+    - VWAP = sum(typical_price × volume) / sum(volume)
+    - Typical price = (high + low) / 2
+    - Resets daily at 00:00 UTC
+    
+    Band Calculation:
+    - Standard deviation calculated from volume-weighted variance
+    - Bands at ±2σ, ±3σ, and ±4σ levels
+    - Dynamic bands adapt to market volatility
+    
+    Automatic Band Detection:
+    - Bot monitors price proximity to bands in real-time
+    - Logs when price enters/exits band proximity zones
+    - Entry signals only when price within 0.5% of target band
+    
+    Risk Management:
+    - Maximum 4 trades per day
+    - 1-hour cooldown after losses
+    - Stop loss at -4σ protects against extreme moves
+    - Time-based exit prevents indefinite positions
 ```
 
 ## Validation Rules

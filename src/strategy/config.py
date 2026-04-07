@@ -13,12 +13,14 @@ logger = logging.getLogger(__name__)
 @dataclass
 class IndicatorConfig:
     """Configuration for a technical indicator."""
-    type: str  # 'rsi' or 'ema'
+    type: str  # 'rsi', 'ema', 'vwap', 'vwap_upper_band', 'vwap_lower_band'
     timeframe: str
-    period: int
+    period: int  # Not used for VWAP indicators
     # RSI-specific fields
     oversold: Optional[float] = None
     overbought: Optional[float] = None
+    # VWAP band-specific field
+    std_dev_multiplier: Optional[float] = None
 
 
 @dataclass
@@ -50,6 +52,59 @@ class PriceNearLevelCondition:
 
 
 @dataclass
+class PriceNearVwapBandCondition:
+    """
+    Condition that checks if price is near a VWAP standard deviation band.
+    
+    This condition is used for VWAP-based range trading strategies where
+    entries occur when price reaches extreme bands (e.g., ±2σ or ±3σ).
+    
+    Attributes:
+        type: Must be "price_near_vwap_band"
+        band_type: "upper" or "lower"
+        std_dev_multiplier: Standard deviation level (e.g., 2.0, 3.0, 4.0)
+        proximity_percent: Proximity threshold percentage (default: 0.5%)
+        description: Optional human-readable description
+    
+    Example:
+        >>> condition = PriceNearVwapBandCondition(
+        ...     type="price_near_vwap_band",
+        ...     band_type="lower",
+        ...     std_dev_multiplier=2.0,
+        ...     proximity_percent=0.5
+        ... )
+    """
+    type: str  # Must be "price_near_vwap_band"
+    band_type: str  # "upper" or "lower"
+    std_dev_multiplier: float  # e.g., 2.0, 3.0, 4.0
+    proximity_percent: float = 0.5  # Default 0.5%
+    description: Optional[str] = None
+    
+    def __post_init__(self):
+        """Validate condition parameters."""
+        if self.type != "price_near_vwap_band":
+            raise ValueError(
+                f"Invalid type for PriceNearVwapBandCondition: {self.type}"
+            )
+        
+        if self.band_type not in ["upper", "lower"]:
+            raise ValueError(
+                f"band_type must be 'upper' or 'lower', got '{self.band_type}'"
+            )
+        
+        if self.std_dev_multiplier <= 0:
+            raise ValueError(
+                f"std_dev_multiplier must be positive, got {self.std_dev_multiplier}"
+            )
+        
+        if self.proximity_percent < 0.1 or self.proximity_percent > 5.0:
+            raise ValueError(
+                f"proximity_percent must be between 0.1 and 5.0, "
+                f"got {self.proximity_percent}"
+            )
+
+
+@dataclass
 class ExitCondition:
     """Configuration for an exit condition."""
     type: str  # 'take_profit', 'stop_loss', 'time_exceeds', 'support_resistance', 'end_of_day'
@@ -59,6 +114,43 @@ class ExitCondition:
     direction: Optional[str] = None  # For support_resistance: 'above' or 'below'
     time_utc: Optional[str] = None  # For end_of_day: HH:MM format
     description: Optional[str] = None
+
+
+@dataclass
+class VwapCrossCondition:
+    """
+    Exit condition for price crossing VWAP line.
+    
+    This condition is used for VWAP-based range trading strategies where
+    exits occur when price crosses back to the VWAP line from extreme bands.
+    
+    Attributes:
+        type: Must be "vwap_cross"
+        direction: "above" or "below" - direction of the cross
+        vwap_indicator: Name of VWAP indicator to reference
+        description: Optional human-readable description
+    
+    Example:
+        >>> condition = VwapCrossCondition(
+        ...     type="vwap_cross",
+        ...     direction="above",
+        ...     vwap_indicator="vwap_1h"
+        ... )
+    """
+    type: str  # Must be "vwap_cross"
+    direction: str  # "above" or "below"
+    vwap_indicator: str  # Name of VWAP indicator to reference
+    description: Optional[str] = None
+    
+    def __post_init__(self):
+        """Validate condition parameters."""
+        if self.type != "vwap_cross":
+            raise ValueError(f"Invalid type for VwapCrossCondition: {self.type}")
+        
+        if self.direction not in ["above", "below"]:
+            raise ValueError(
+                f"direction must be 'above' or 'below', got '{self.direction}'"
+            )
 
 
 @dataclass
@@ -75,8 +167,8 @@ class StrategyConfig:
     symbol: str
     timeframes: List[str]
     indicators: Dict[str, IndicatorConfig]
-    entry_conditions: List[Union[EntryCondition, PriceNearLevelCondition]] = field(default_factory=list)
-    exit_conditions: List[ExitCondition] = field(default_factory=list)
+    entry_conditions: List[Union[EntryCondition, PriceNearLevelCondition, PriceNearVwapBandCondition]] = field(default_factory=list)
+    exit_conditions: List[Union[ExitCondition, VwapCrossCondition, PriceNearVwapBandCondition]] = field(default_factory=list)
     position_size: float = 0.0
     max_position_size: float = 0.0
     risk_parameters: Optional[RiskParameters] = None
@@ -172,7 +264,7 @@ class StrategyConfig:
         errors = []
         
         # Validate indicator type
-        valid_types = ["rsi", "ema"]
+        valid_types = ["rsi", "ema", "vwap", "vwap_upper_band", "vwap_lower_band"]
         if indicator.type not in valid_types:
             errors.append(f"Indicator '{name}': type must be one of {valid_types}")
         
@@ -181,9 +273,10 @@ class StrategyConfig:
         if indicator.timeframe not in valid_timeframes:
             errors.append(f"Indicator '{name}': timeframe must be one of {valid_timeframes}")
         
-        # Validate period
-        if indicator.period <= 0:
-            errors.append(f"Indicator '{name}': period must be positive")
+        # Validate period (not used for VWAP indicators)
+        if indicator.type not in ["vwap", "vwap_upper_band", "vwap_lower_band"]:
+            if indicator.period <= 0:
+                errors.append(f"Indicator '{name}': period must be positive")
         
         # Validate RSI-specific fields
         if indicator.type == "rsi":
@@ -192,9 +285,21 @@ class StrategyConfig:
             if indicator.overbought is not None and (indicator.overbought < 0 or indicator.overbought > 100):
                 errors.append(f"Indicator '{name}': overbought must be between 0 and 100")
         
+        # Validate VWAP band-specific fields
+        if indicator.type in ["vwap_upper_band", "vwap_lower_band"]:
+            if indicator.std_dev_multiplier is None:
+                errors.append(
+                    f"Indicator '{name}': std_dev_multiplier is required for "
+                    f"{indicator.type}"
+                )
+            elif indicator.std_dev_multiplier <= 0:
+                errors.append(
+                    f"Indicator '{name}': std_dev_multiplier must be positive"
+                )
+        
         return errors
     
-    def _validate_entry_condition(self, index: int, condition: Union[EntryCondition, PriceNearLevelCondition]) -> List[str]:
+    def _validate_entry_condition(self, index: int, condition: Union[EntryCondition, PriceNearLevelCondition, PriceNearVwapBandCondition]) -> List[str]:
         """Validate an entry condition."""
         errors = []
         
@@ -205,6 +310,24 @@ class StrategyConfig:
                 errors.append(f"Entry condition {index}: price_near_level with level='support' requires support_level to be defined")
             if condition.level == "resistance" and self.resistance_level is None:
                 errors.append(f"Entry condition {index}: price_near_level with level='resistance' requires resistance_level to be defined")
+            return errors
+        
+        # Handle PriceNearVwapBandCondition
+        if isinstance(condition, PriceNearVwapBandCondition):
+            # Validation is done in __post_init__, just check if matching VWAP band indicator exists
+            band_indicator_found = False
+            for name, indicator in self.indicators.items():
+                if indicator.type == f"vwap_{condition.band_type}_band":
+                    if indicator.std_dev_multiplier == condition.std_dev_multiplier:
+                        band_indicator_found = True
+                        break
+            
+            if not band_indicator_found:
+                errors.append(
+                    f"Entry condition {index}: price_near_vwap_band requires a "
+                    f"vwap_{condition.band_type}_band indicator with "
+                    f"std_dev_multiplier={condition.std_dev_multiplier}"
+                )
             return errors
         
         # Handle EntryCondition
@@ -235,10 +358,46 @@ class StrategyConfig:
         
         return errors
     
-    def _validate_exit_condition(self, index: int, condition: ExitCondition) -> List[str]:
+    def _validate_exit_condition(self, index: int, condition: Union[ExitCondition, VwapCrossCondition, PriceNearVwapBandCondition]) -> List[str]:
         """Validate an exit condition."""
         errors = []
         
+        # Handle VwapCrossCondition
+        if isinstance(condition, VwapCrossCondition):
+            # Validation is done in __post_init__, just check if VWAP indicator exists
+            if condition.vwap_indicator not in self.indicators:
+                errors.append(
+                    f"Exit condition {index}: vwap_indicator '{condition.vwap_indicator}' "
+                    f"not defined in indicators"
+                )
+            else:
+                # Verify it's actually a VWAP indicator
+                indicator = self.indicators[condition.vwap_indicator]
+                if indicator.type != "vwap":
+                    errors.append(
+                        f"Exit condition {index}: vwap_indicator '{condition.vwap_indicator}' "
+                        f"must reference a 'vwap' type indicator, got '{indicator.type}'"
+                    )
+            return errors
+        
+        # Handle PriceNearVwapBandCondition
+        if isinstance(condition, PriceNearVwapBandCondition):
+            # Validation is done in __post_init__, just check if matching band indicator exists
+            band_type = f"vwap_{condition.band_type}_band"
+            found = False
+            for name, indicator in self.indicators.items():
+                if (indicator.type == band_type and 
+                    indicator.std_dev_multiplier == condition.std_dev_multiplier):
+                    found = True
+                    break
+            if not found:
+                errors.append(
+                    f"Exit condition {index}: No matching VWAP band indicator found for "
+                    f"band_type='{condition.band_type}' with std_dev_multiplier={condition.std_dev_multiplier}"
+                )
+            return errors
+        
+        # Handle ExitCondition
         valid_types = ["take_profit", "stop_loss", "time_exceeds", "support_resistance", "end_of_day"]
         if condition.type not in valid_types:
             errors.append(f"Exit condition {index}: type must be one of {valid_types}")
@@ -382,22 +541,34 @@ def load_strategy_from_yaml(file_path: Path) -> StrategyConfig:
                 timeframe=indicator_data.get("timeframe"),
                 period=indicator_data.get("period"),
                 oversold=indicator_data.get("oversold"),
-                overbought=indicator_data.get("overbought")
+                overbought=indicator_data.get("overbought"),
+                std_dev_multiplier=indicator_data.get("std_dev_multiplier")
             )
         
         # Parse entry conditions
         entry_conditions = []
         for condition_data in data.get("entry_conditions", []):
+            condition_type = condition_data.get("type")
+            
             # Check if this is a price_near_level condition
-            if condition_data.get("type") == "price_near_level":
+            if condition_type == "price_near_level":
                 entry_conditions.append(PriceNearLevelCondition(
-                    type=condition_data.get("type"),
+                    type=condition_type,
                     level=condition_data.get("level"),
+                    description=condition_data.get("description")
+                ))
+            # Check if this is a price_near_vwap_band condition
+            elif condition_type == "price_near_vwap_band":
+                entry_conditions.append(PriceNearVwapBandCondition(
+                    type=condition_type,
+                    band_type=condition_data.get("band_type"),
+                    std_dev_multiplier=condition_data.get("std_dev_multiplier"),
+                    proximity_percent=condition_data.get("proximity_percent", 0.5),
                     description=condition_data.get("description")
                 ))
             else:
                 entry_conditions.append(EntryCondition(
-                    type=condition_data.get("type"),
+                    type=condition_type,
                     indicator=condition_data.get("indicator"),
                     indicator1=condition_data.get("indicator1"),
                     indicator2=condition_data.get("indicator2"),
@@ -408,15 +579,35 @@ def load_strategy_from_yaml(file_path: Path) -> StrategyConfig:
         # Parse exit conditions
         exit_conditions = []
         for condition_data in data.get("exit_conditions", []):
-            exit_conditions.append(ExitCondition(
-                type=condition_data.get("type"),
-                percent=condition_data.get("percent"),
-                seconds=condition_data.get("seconds"),
-                price=condition_data.get("price"),
-                direction=condition_data.get("direction"),
-                time_utc=condition_data.get("time_utc"),
-                description=condition_data.get("description")
-            ))
+            condition_type = condition_data.get("type")
+            
+            # Check if this is a vwap_cross condition
+            if condition_type == "vwap_cross":
+                exit_conditions.append(VwapCrossCondition(
+                    type=condition_type,
+                    direction=condition_data.get("direction"),
+                    vwap_indicator=condition_data.get("vwap_indicator"),
+                    description=condition_data.get("description")
+                ))
+            # Check if this is a price_near_vwap_band condition
+            elif condition_type == "price_near_vwap_band":
+                exit_conditions.append(PriceNearVwapBandCondition(
+                    type=condition_type,
+                    band_type=condition_data.get("band_type"),
+                    std_dev_multiplier=condition_data.get("std_dev_multiplier"),
+                    proximity_percent=condition_data.get("proximity_percent", 0.5),
+                    description=condition_data.get("description")
+                ))
+            else:
+                exit_conditions.append(ExitCondition(
+                    type=condition_type,
+                    percent=condition_data.get("percent"),
+                    seconds=condition_data.get("seconds"),
+                    price=condition_data.get("price"),
+                    direction=condition_data.get("direction"),
+                    time_utc=condition_data.get("time_utc"),
+                    description=condition_data.get("description")
+                ))
         
         # Parse risk parameters if present
         risk_parameters = None

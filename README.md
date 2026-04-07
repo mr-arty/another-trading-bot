@@ -257,6 +257,45 @@ risk_parameters:
 | Bollinger Bands | `bollinger_upper`, `bollinger_lower` | `period`, `std_dev` |
 | Volume Average | `volume_sma` | `period` |
 | Swing High/Low | `swing_high`, `swing_low` | `lookback`, `pivot_bars` |
+| VWAP | `vwap` | `timeframe` |
+| VWAP Bands | `vwap_upper_band`, `vwap_lower_band` | `timeframe`, `std_dev_multiplier` |
+
+### VWAP Range Trading Strategy
+
+The bot supports VWAP (Volume-Weighted Average Price) based range trading with dynamic standard deviation bands:
+
+**Key Features**:
+- Real-time VWAP calculation with volume weighting
+- Automatic daily session reset at 00:00 UTC
+- Multiple standard deviation bands (±1σ, ±2σ, ±3σ, ±4σ)
+- Automatic proximity detection for band-based entries
+- Mean reversion exits at VWAP line
+
+**Example Strategy**:
+```yaml
+indicators:
+  vwap_1h:
+    type: "vwap"
+    timeframe: "1h"
+  
+  vwap_lower_2std:
+    type: "vwap_lower_band"
+    timeframe: "1h"
+    std_dev_multiplier: 2.0
+
+entry_conditions:
+  - type: "price_near_vwap_band"
+    band_type: "lower"
+    std_dev_multiplier: 2.0
+    proximity_percent: 0.5
+
+exit_conditions:
+  - type: "vwap_cross"
+    direction: "above"
+    vwap_indicator: "vwap_1h"
+```
+
+See `strategies/vwap_range_trading.yaml` for a complete example.
 
 ### Entry Condition Types
 
@@ -266,6 +305,8 @@ risk_parameters:
 - `cross_below`: Indicator1 crosses below Indicator2
 - `price_above`: Price above indicator
 - `price_below`: Price below indicator
+- `price_near_level`: Price within proximity of support/resistance level
+- `price_near_vwap_band`: Price within proximity of VWAP standard deviation band
 
 ### Exit Condition Types
 
@@ -275,6 +316,7 @@ risk_parameters:
 - `end_of_day`: Exit at specific UTC time
 - `support_resistance`: Exit at price level
 - `cross_below`: Exit when indicator crosses below
+- `vwap_cross`: Exit when price crosses VWAP line
 
 ### Complete Schema Documentation
 
