@@ -613,6 +613,103 @@ class IndicatorCalculator:
         
         return band
     
+    async def calculate_atr(
+        self,
+        symbol: str,
+        timeframe: str,
+        period: int = 14,
+        use_cache: bool = True
+    ) -> Optional[float]:
+        """
+        Calculate Average True Range (ATR).
+        
+        ATR measures market volatility using the True Range:
+        TR = max(high - low, abs(high - previous_close), abs(low - previous_close))
+        ATR = EMA(TR, period)
+        
+        Args:
+            symbol: Trading symbol
+            timeframe: Timeframe (5m, 15m, 30m, 1h, 4h, 1d)
+            period: ATR period (default 14)
+            use_cache: Use cached value if available
+            
+        Returns:
+            ATR value or None if insufficient data
+        """
+        # Check cache first
+        if use_cache:
+            cached = await self._get_cached_value(symbol, "atr", timeframe, period)
+            if cached is not None:
+                return cached
+        
+        async with self._lock:
+            # Get historical data
+            key = (symbol, timeframe)
+            if key not in self._historical_data:
+                logger.warning(
+                    "no_historical_data",
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    indicator="atr"
+                )
+                return None
+            
+            data_points = list(self._historical_data[key])
+            
+            # Need at least period + 1 data points (need previous close for first TR)
+            if len(data_points) < period + 1:
+                logger.debug(
+                    "insufficient_data_for_atr",
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    period=period,
+                    required=period + 1,
+                    available=len(data_points)
+                )
+                return None
+            
+            # Calculate True Range for each data point
+            true_ranges = []
+            for i in range(1, len(data_points)):
+                current = data_points[i]
+                previous = data_points[i - 1]
+                
+                # TR = max(high - low, abs(high - previous_close), abs(low - previous_close))
+                tr = max(
+                    current.high - current.low,
+                    abs(current.high - previous.close),
+                    abs(current.low - previous.close)
+                )
+                true_ranges.append(tr)
+            
+            # Convert to pandas Series for EMA calculation
+            tr_series = pd.Series(true_ranges)
+            
+            # Calculate ATR using EMA smoothing
+            atr_series = tr_series.ewm(span=period, adjust=False).mean()
+            
+            # Get the latest ATR value
+            atr_value = float(atr_series.iloc[-1])
+            
+            # Cache the result
+            await self._cache_value(
+                symbol=symbol,
+                indicator_type="atr",
+                timeframe=timeframe,
+                period=period,
+                value=atr_value
+            )
+            
+            logger.debug(
+                "atr_calculated",
+                symbol=symbol,
+                timeframe=timeframe,
+                period=period,
+                atr=atr_value
+            )
+            
+            return atr_value
+    
     async def _get_cached_value(
         self,
         symbol: str,

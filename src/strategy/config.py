@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class IndicatorConfig:
     """Configuration for a technical indicator."""
-    type: str  # 'rsi', 'ema', 'vwap', 'vwap_upper_band', 'vwap_lower_band'
+    type: str  # 'rsi', 'ema', 'vwap', 'vwap_upper_band', 'vwap_lower_band', 'atr'
     timeframe: str
     period: int  # Not used for VWAP indicators
     # RSI-specific fields
@@ -154,6 +154,130 @@ class VwapCrossCondition:
 
 
 @dataclass
+class AtrThresholdCondition:
+    """
+    Exit condition based on ATR threshold.
+    
+    Triggers when ATR crosses above or below a specified threshold value.
+    Useful for exiting during high volatility spikes or low volatility periods.
+    
+    Attributes:
+        type: Must be "atr_threshold"
+        atr_indicator: Name of ATR indicator to reference
+        threshold: ATR threshold value
+        direction: "above" or "below" - direction of comparison
+        description: Optional human-readable description
+    
+    Example:
+        >>> condition = AtrThresholdCondition(
+        ...     type="atr_threshold",
+        ...     atr_indicator="atr_1h",
+        ...     threshold=500.0,
+        ...     direction="above"
+        ... )
+    """
+    type: str  # Must be "atr_threshold"
+    atr_indicator: str
+    threshold: float
+    direction: str  # "above" or "below"
+    description: Optional[str] = None
+    
+    def __post_init__(self):
+        """Validate condition parameters."""
+        if self.type != "atr_threshold":
+            raise ValueError(f"Invalid type for AtrThresholdCondition: {self.type}")
+        
+        if self.direction not in ["above", "below"]:
+            raise ValueError(
+                f"direction must be 'above' or 'below', got '{self.direction}'"
+            )
+        
+        if self.threshold <= 0:
+            raise ValueError(f"threshold must be positive, got {self.threshold}")
+
+
+@dataclass
+class AtrStopLossCondition:
+    """
+    Exit condition based on ATR multiplier stop loss.
+    
+    Calculates dynamic stop loss as entry_price ± (ATR × multiplier).
+    Stop loss adapts to market volatility - wider stops in volatile markets,
+    tighter stops in calm markets.
+    
+    Attributes:
+        type: Must be "atr_stop_loss"
+        atr_indicator: Name of ATR indicator to reference
+        multiplier: ATR multiplier for stop loss distance
+        description: Optional human-readable description
+    
+    Example:
+        >>> condition = AtrStopLossCondition(
+        ...     type="atr_stop_loss",
+        ...     atr_indicator="atr_1h",
+        ...     multiplier=2.0
+        ... )
+    """
+    type: str  # Must be "atr_stop_loss"
+    atr_indicator: str
+    multiplier: float
+    description: Optional[str] = None
+    
+    def __post_init__(self):
+        """Validate condition parameters."""
+        if self.type != "atr_stop_loss":
+            raise ValueError(f"Invalid type for AtrStopLossCondition: {self.type}")
+        
+        if self.multiplier <= 0:
+            raise ValueError(f"multiplier must be positive, got {self.multiplier}")
+
+
+@dataclass
+class AtrPercentChangeCondition:
+    """
+    Exit condition based on ATR percentage change from entry.
+    
+    Triggers when ATR changes by a specified percentage from entry_atr.
+    Useful for detecting sudden volatility spikes or contractions.
+    
+    Attributes:
+        type: Must be "atr_percent_change"
+        atr_indicator: Name of ATR indicator to reference
+        percent_change: Percentage change threshold
+        direction: "increase" or "decrease"
+        description: Optional human-readable description
+    
+    Example:
+        >>> condition = AtrPercentChangeCondition(
+        ...     type="atr_percent_change",
+        ...     atr_indicator="atr_1h",
+        ...     percent_change=50.0,
+        ...     direction="increase"
+        ... )
+    """
+    type: str  # Must be "atr_percent_change"
+    atr_indicator: str
+    percent_change: float
+    direction: str  # "increase" or "decrease"
+    description: Optional[str] = None
+    
+    def __post_init__(self):
+        """Validate condition parameters."""
+        if self.type != "atr_percent_change":
+            raise ValueError(f"Invalid type for AtrPercentChangeCondition: {self.type}")
+        
+        if self.direction not in ["increase", "decrease"]:
+            raise ValueError(
+                f"direction must be 'increase' or 'decrease', got '{self.direction}'"
+            )
+        
+        if self.percent_change <= 0:
+            raise ValueError(
+                f"percent_change must be positive, got {self.percent_change}"
+            )
+
+
+@dataclass
 class RiskParameters:
     """Risk management parameters for a strategy."""
     max_trades_per_day: Optional[int] = None
@@ -168,7 +292,7 @@ class StrategyConfig:
     timeframes: List[str]
     indicators: Dict[str, IndicatorConfig]
     entry_conditions: List[Union[EntryCondition, PriceNearLevelCondition, PriceNearVwapBandCondition]] = field(default_factory=list)
-    exit_conditions: List[Union[ExitCondition, VwapCrossCondition, PriceNearVwapBandCondition]] = field(default_factory=list)
+    exit_conditions: List[Union[ExitCondition, VwapCrossCondition, PriceNearVwapBandCondition, AtrThresholdCondition, AtrStopLossCondition, AtrPercentChangeCondition]] = field(default_factory=list)
     position_size: float = 0.0
     max_position_size: float = 0.0
     risk_parameters: Optional[RiskParameters] = None
@@ -264,7 +388,7 @@ class StrategyConfig:
         errors = []
         
         # Validate indicator type
-        valid_types = ["rsi", "ema", "vwap", "vwap_upper_band", "vwap_lower_band"]
+        valid_types = ["rsi", "ema", "vwap", "vwap_upper_band", "vwap_lower_band", "atr"]
         if indicator.type not in valid_types:
             errors.append(f"Indicator '{name}': type must be one of {valid_types}")
         
@@ -358,7 +482,7 @@ class StrategyConfig:
         
         return errors
     
-    def _validate_exit_condition(self, index: int, condition: Union[ExitCondition, VwapCrossCondition, PriceNearVwapBandCondition]) -> List[str]:
+    def _validate_exit_condition(self, index: int, condition: Union[ExitCondition, VwapCrossCondition, PriceNearVwapBandCondition, AtrThresholdCondition, AtrStopLossCondition, AtrPercentChangeCondition]) -> List[str]:
         """Validate an exit condition."""
         errors = []
         
@@ -395,6 +519,60 @@ class StrategyConfig:
                     f"Exit condition {index}: No matching VWAP band indicator found for "
                     f"band_type='{condition.band_type}' with std_dev_multiplier={condition.std_dev_multiplier}"
                 )
+            return errors
+        
+        # Handle AtrThresholdCondition
+        if isinstance(condition, AtrThresholdCondition):
+            # Validation is done in __post_init__, just check if ATR indicator exists
+            if condition.atr_indicator not in self.indicators:
+                errors.append(
+                    f"Exit condition {index}: atr_indicator '{condition.atr_indicator}' "
+                    f"not defined in indicators"
+                )
+            else:
+                # Verify it's actually an ATR indicator
+                indicator = self.indicators[condition.atr_indicator]
+                if indicator.type != "atr":
+                    errors.append(
+                        f"Exit condition {index}: atr_indicator '{condition.atr_indicator}' "
+                        f"must reference an 'atr' type indicator, got '{indicator.type}'"
+                    )
+            return errors
+        
+        # Handle AtrStopLossCondition
+        if isinstance(condition, AtrStopLossCondition):
+            # Validation is done in __post_init__, just check if ATR indicator exists
+            if condition.atr_indicator not in self.indicators:
+                errors.append(
+                    f"Exit condition {index}: atr_indicator '{condition.atr_indicator}' "
+                    f"not defined in indicators"
+                )
+            else:
+                # Verify it's actually an ATR indicator
+                indicator = self.indicators[condition.atr_indicator]
+                if indicator.type != "atr":
+                    errors.append(
+                        f"Exit condition {index}: atr_indicator '{condition.atr_indicator}' "
+                        f"must reference an 'atr' type indicator, got '{indicator.type}'"
+                    )
+            return errors
+        
+        # Handle AtrPercentChangeCondition
+        if isinstance(condition, AtrPercentChangeCondition):
+            # Validation is done in __post_init__, just check if ATR indicator exists
+            if condition.atr_indicator not in self.indicators:
+                errors.append(
+                    f"Exit condition {index}: atr_indicator '{condition.atr_indicator}' "
+                    f"not defined in indicators"
+                )
+            else:
+                # Verify it's actually an ATR indicator
+                indicator = self.indicators[condition.atr_indicator]
+                if indicator.type != "atr":
+                    errors.append(
+                        f"Exit condition {index}: atr_indicator '{condition.atr_indicator}' "
+                        f"must reference an 'atr' type indicator, got '{indicator.type}'"
+                    )
             return errors
         
         # Handle ExitCondition
@@ -596,6 +774,32 @@ def load_strategy_from_yaml(file_path: Path) -> StrategyConfig:
                     band_type=condition_data.get("band_type"),
                     std_dev_multiplier=condition_data.get("std_dev_multiplier"),
                     proximity_percent=condition_data.get("proximity_percent", 0.5),
+                    description=condition_data.get("description")
+                ))
+            # Check if this is an atr_threshold condition
+            elif condition_type == "atr_threshold":
+                exit_conditions.append(AtrThresholdCondition(
+                    type=condition_type,
+                    atr_indicator=condition_data.get("atr_indicator"),
+                    threshold=condition_data.get("threshold"),
+                    direction=condition_data.get("direction"),
+                    description=condition_data.get("description")
+                ))
+            # Check if this is an atr_stop_loss condition
+            elif condition_type == "atr_stop_loss":
+                exit_conditions.append(AtrStopLossCondition(
+                    type=condition_type,
+                    atr_indicator=condition_data.get("atr_indicator"),
+                    multiplier=condition_data.get("multiplier"),
+                    description=condition_data.get("description")
+                ))
+            # Check if this is an atr_percent_change condition
+            elif condition_type == "atr_percent_change":
+                exit_conditions.append(AtrPercentChangeCondition(
+                    type=condition_type,
+                    atr_indicator=condition_data.get("atr_indicator"),
+                    percent_change=condition_data.get("percent_change"),
+                    direction=condition_data.get("direction"),
                     description=condition_data.get("description")
                 ))
             else:
