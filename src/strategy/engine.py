@@ -6,7 +6,11 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Callable, Awaitable, Any
 import structlog
 
-from src.strategy.config import StrategyConfig, EntryCondition, ExitCondition, PriceNearLevelCondition, PriceNearVwapBandCondition, VwapCrossCondition
+from src.strategy.config import (
+    StrategyConfig, EntryCondition, ExitCondition, 
+    PriceNearLevelCondition, PriceNearVwapBandCondition, VwapCrossCondition,
+    AtrThresholdCondition, AtrStopLossCondition, AtrPercentChangeCondition
+)
 from src.exchange.connector import MarketData
 from src.indicators.calculator import IndicatorCalculator
 
@@ -759,6 +763,213 @@ class StrategyEngine:
         
         return is_near, reason
     
+    async def _evaluate_atr_threshold(
+        self,
+        condition: AtrThresholdCondition,
+        indicators: Dict[str, float]
+    ) -> tuple[bool, str]:
+        """
+        Evaluate ATR threshold condition.
+        
+        Checks if current ATR is above or below the threshold.
+        
+        Args:
+            condition: ATR threshold condition
+            indicators: Current indicator values
+            
+        Returns:
+            Tuple of (condition_met, reason_string)
+        """
+        # Get current ATR value
+        current_atr = indicators.get(condition.atr_indicator)
+        
+        if current_atr is None:
+            logger.warning(
+                "atr_value_not_available",
+                indicator=condition.atr_indicator,
+                message="ATR value not available for threshold evaluation"
+            )
+            return False, ""
+        
+        # Compare ATR to threshold
+        if condition.direction == "above":
+            met = current_atr > condition.threshold
+            reason = (
+                f"ATR {current_atr:.2f} {'>' if met else '<='} "
+                f"threshold {condition.threshold:.2f}"
+            )
+        else:  # "below"
+            met = current_atr < condition.threshold
+            reason = (
+                f"ATR {current_atr:.2f} {'<' if met else '>='} "
+                f"threshold {condition.threshold:.2f}"
+            )
+        
+        logger.debug(
+            "atr_threshold_evaluated",
+            indicator=condition.atr_indicator,
+            current_atr=current_atr,
+            threshold=condition.threshold,
+            direction=condition.direction,
+            met=met
+        )
+        
+        return met, reason
+    
+    async def _evaluate_atr_stop_loss(
+        self,
+        condition: AtrStopLossCondition,
+        state: StrategyState,
+        current_price: float,
+        indicators: Dict[str, float]
+    ) -> tuple[bool, str]:
+        """
+        Evaluate ATR-based stop loss condition.
+        
+        Calculates dynamic stop loss based on entry price and ATR multiplier.
+        For long positions: stop_loss = entry_price - (ATR × multiplier)
+        For short positions: stop_loss = entry_price + (ATR × multiplier)
+        
+        Args:
+            condition: ATR stop loss condition
+            state: Strategy state
+            current_price: Current market price
+            indicators: Current indicator values
+            
+        Returns:
+            Tuple of (condition_met, reason_string)
+        """
+        # Check if entry_price is available
+        if state.entry_price is None:
+            return False, ""
+        
+        # Get current ATR value
+        current_atr = indicators.get(condition.atr_indicator)
+        
+        if current_atr is None:
+            logger.warning(
+                "atr_value_not_available",
+                indicator=condition.atr_indicator,
+                message="ATR value not available for stop loss evaluation"
+            )
+            return False, ""
+        
+        # Calculate stop loss price based on position direction
+        config = state.config
+        if config.position_direction == "long":
+            # Long position: stop loss below entry
+            stop_loss_price = state.entry_price - (current_atr * condition.multiplier)
+            met = current_price <= stop_loss_price
+            reason = (
+                f"ATR stop loss: price {current_price:.2f} "
+                f"{'<=' if met else '>'} stop {stop_loss_price:.2f} "
+                f"(entry {state.entry_price:.2f} - {condition.multiplier}×ATR {current_atr:.2f})"
+            )
+        else:  # "short"
+            # Short position: stop loss above entry
+            stop_loss_price = state.entry_price + (current_atr * condition.multiplier)
+            met = current_price >= stop_loss_price
+            reason = (
+                f"ATR stop loss: price {current_price:.2f} "
+                f"{'>=' if met else '<'} stop {stop_loss_price:.2f} "
+                f"(entry {state.entry_price:.2f} + {condition.multiplier}×ATR {current_atr:.2f})"
+            )
+        
+        logger.debug(
+            "atr_stop_loss_evaluated",
+            indicator=condition.atr_indicator,
+            position_direction=config.position_direction,
+            entry_price=state.entry_price,
+            current_price=current_price,
+            current_atr=current_atr,
+            multiplier=condition.multiplier,
+            stop_loss_price=stop_loss_price,
+            met=met
+        )
+        
+        return met, reason
+    
+    async def _evaluate_atr_percent_change(
+        self,
+        condition: AtrPercentChangeCondition,
+        state: StrategyState,
+        indicators: Dict[str, float]
+    ) -> tuple[bool, str]:
+        """
+        Evaluate ATR percentage change condition.
+        
+        Compares current ATR to entry_atr to detect volatility changes.
+        
+        Args:
+            condition: ATR percent change condition
+            state: Strategy state
+            indicators: Current indicator values
+            
+        Returns:
+            Tuple of (condition_met, reason_string)
+        """
+        # Check if entry_atr is available
+        if state.entry_atr is None:
+            logger.debug(
+                "entry_atr_not_available",
+                strategy=state.config.name,
+                message="entry_atr not available for percent change evaluation"
+            )
+            return False, ""
+        
+        # Check for zero entry_atr
+        if state.entry_atr == 0:
+            logger.warning(
+                "entry_atr_zero",
+                strategy=state.config.name,
+                message="entry_atr is zero, cannot calculate percent change"
+            )
+            return False, ""
+        
+        # Get current ATR value
+        current_atr = indicators.get(condition.atr_indicator)
+        
+        if current_atr is None:
+            logger.warning(
+                "atr_value_not_available",
+                indicator=condition.atr_indicator,
+                message="ATR value not available for percent change evaluation"
+            )
+            return False, ""
+        
+        # Calculate percentage change based on direction
+        if condition.direction == "increase":
+            # Check for ATR increase
+            percent_change = ((current_atr - state.entry_atr) / state.entry_atr) * 100
+            met = percent_change >= condition.percent_change
+            reason = (
+                f"ATR increased {percent_change:.2f}% "
+                f"(from {state.entry_atr:.2f} to {current_atr:.2f}), "
+                f"threshold {condition.percent_change:.2f}%"
+            )
+        else:  # "decrease"
+            # Check for ATR decrease
+            percent_change = ((state.entry_atr - current_atr) / state.entry_atr) * 100
+            met = percent_change >= condition.percent_change
+            reason = (
+                f"ATR decreased {percent_change:.2f}% "
+                f"(from {state.entry_atr:.2f} to {current_atr:.2f}), "
+                f"threshold {condition.percent_change:.2f}%"
+            )
+        
+        logger.debug(
+            "atr_percent_change_evaluated",
+            indicator=condition.atr_indicator,
+            entry_atr=state.entry_atr,
+            current_atr=current_atr,
+            direction=condition.direction,
+            percent_change=abs(percent_change),
+            threshold=condition.percent_change,
+            met=met
+        )
+        
+        return met, reason
+    
     async def _evaluate_vwap_cross_condition(
         self,
         condition: VwapCrossCondition,
@@ -872,6 +1083,7 @@ class StrategyEngine:
             condition: Exit condition to evaluate
             state: Strategy state
             data: Market data
+            indicators: Current indicator values
             
         Returns:
             Tuple of (condition_met, reason_string)
@@ -883,6 +1095,30 @@ class StrategyEngine:
                     condition,
                     state,
                     data.close,
+                    indicators
+                )
+            
+            # Handle AtrThresholdCondition
+            if isinstance(condition, AtrThresholdCondition):
+                return await self._evaluate_atr_threshold(
+                    condition,
+                    indicators
+                )
+            
+            # Handle AtrStopLossCondition
+            if isinstance(condition, AtrStopLossCondition):
+                return await self._evaluate_atr_stop_loss(
+                    condition,
+                    state,
+                    data.close,
+                    indicators
+                )
+            
+            # Handle AtrPercentChangeCondition
+            if isinstance(condition, AtrPercentChangeCondition):
+                return await self._evaluate_atr_percent_change(
+                    condition,
+                    state,
                     indicators
                 )
             
@@ -942,7 +1178,7 @@ class StrategyEngine:
         except Exception as e:
             logger.error(
                 "exit_condition_evaluation_error",
-                condition_type=condition.type,
+                condition_type=getattr(condition, 'type', 'unknown'),
                 error=str(e),
                 exc_info=True
             )
