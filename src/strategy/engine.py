@@ -1196,7 +1196,18 @@ class StrategyEngine:
         state.last_signal = signal
         state.last_signal_time = signal.timestamp
         
-        if signal.side == 'buy':
+        # Determine if this is an entry or exit based on position direction
+        config = state.config
+        is_entry = (
+            (config.position_direction == "long" and signal.side == "buy") or
+            (config.position_direction == "short" and signal.side == "sell")
+        )
+        is_exit = (
+            (config.position_direction == "long" and signal.side == "sell") or
+            (config.position_direction == "short" and signal.side == "buy")
+        )
+        
+        if is_entry:
             state.has_position = True
             state.entry_time = signal.timestamp
             # Entry price will be updated when order fills
@@ -1223,7 +1234,7 @@ class StrategyEngine:
                         entry_atr=entry_atr
                     )
                     
-        elif signal.side == 'sell':
+        elif is_exit:
             state.has_position = False
             state.entry_time = None
             state.entry_price = None
