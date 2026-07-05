@@ -42,6 +42,7 @@ class StrategyState:
     last_signal_time: Optional[datetime] = None
     entry_time: Optional[datetime] = None
     entry_price: Optional[float] = None
+    entry_atr: Optional[float] = None
     has_position: bool = False
     error_count: int = 0
     last_error: Optional[str] = None
@@ -963,10 +964,34 @@ class StrategyEngine:
             state.has_position = True
             state.entry_time = signal.timestamp
             # Entry price will be updated when order fills
+            
+            # Store entry_atr if available (find first ATR indicator)
+            pair_key = (state.config.name, state.config.symbol)
+            if pair_key in self._pair_states:
+                indicators = self._pair_states[pair_key].get('indicators', {})
+                
+                # Find first ATR indicator value
+                entry_atr = None
+                for ind_name, ind_config in state.config.indicators.items():
+                    if ind_config.type == 'atr':
+                        entry_atr = indicators.get(ind_name)
+                        if entry_atr is not None:
+                            break
+                
+                if entry_atr is not None:
+                    state.entry_atr = entry_atr
+                    logger.info(
+                        "entry_atr_stored",
+                        strategy=state.config.name,
+                        symbol=state.config.symbol,
+                        entry_atr=entry_atr
+                    )
+                    
         elif signal.side == 'sell':
             state.has_position = False
             state.entry_time = None
             state.entry_price = None
+            state.entry_atr = None
         
         # Call signal callback if registered
         if self.signal_callback:
@@ -1010,6 +1035,7 @@ class StrategyEngine:
             elif not has_position:
                 state.entry_price = None
                 state.entry_time = None
+                state.entry_atr = None
             
             logger.debug(
                 "position_state_updated",
